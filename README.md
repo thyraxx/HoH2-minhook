@@ -75,26 +75,9 @@ Upon a successful build, `winmm.dll` will be generated in the `root` folder.
 ### Install
 Copy `winmm.dll` into the game directory next to `HWR2.exe`:
 
-- **PowerShell**:
-  ```powershell
-  .\install.ps1
-  ```
-- **CMD**:
-  ```cmd
-  install.bat
-  ```
-
 ### Uninstall
 Delete `winmm.dll` from the game root:
 
-- **PowerShell**:
-  ```powershell
-  .\uninstall.ps1
-  ```
-- **CMD**:
-  ```cmd
-  uninstall.bat
-  ```
 Because `HWR2.exe` was never touched, deleting `winmm.dll` completely restores the vanilla game.
 
 ---
