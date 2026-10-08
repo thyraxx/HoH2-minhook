@@ -48,7 +48,7 @@ To build this project from source, you need:
 ## How to Build Yourself
 
 ### 1. Build via PowerShell (Recommended)
-Open PowerShell in the `root` directory and run:
+Open PowerShell in this repository and run:
 
 ```powershell
 .\build.ps1
@@ -66,7 +66,14 @@ The script will:
 build.bat
 ```
 
-Upon a successful build, `winmm.dll` will be generated in the `root` folder.
+Upon a successful build, `winmm.dll` will be generated in the root of the repository.
+
+### 3. Automated Cloud Builds (GitHub Actions)
+If you host this repository on GitHub:
+- A GitHub Actions workflow is included at [`.github/workflows/build.yml`](file:///e:/SteamLibrary/steamapps/common/Heroes%20of%20Hammerwatch%202%20AGY/patch_scr/.github/workflows/build.yml).
+- Every `git push` or pull request automatically compiles the code, runs the test suite, and uploads `winmm.dll` as a downloadable artifact.
+- You can trigger builds manually from the **Actions** tab $\rightarrow$ **Build and Test Proxy DLL** $\rightarrow$ **Run workflow**.
+- Pushing a version tag (e.g. `v1.0.0`) automatically publishes a GitHub Release with `winmm.dll` attached.
 
 ---
 
@@ -75,10 +82,51 @@ Upon a successful build, `winmm.dll` will be generated in the `root` folder.
 ### Install
 Copy `winmm.dll` into the game directory next to `HWR2.exe`:
 
+- **PowerShell**:
+  ```powershell
+  .\install.ps1
+  ```
+- **CMD**:
+  ```cmd
+  install.bat
+  ```
+
 ### Uninstall
 Delete `winmm.dll` from the game root:
 
+- **PowerShell**:
+  ```powershell
+  .\uninstall.ps1
+  ```
+- **CMD**:
+  ```cmd
+  uninstall.bat
+  ```
 Because `HWR2.exe` was never touched, deleting `winmm.dll` completely restores the vanilla game.
+
+---
+
+## Console Examples
+
+Open the in-game developer console using the tilde key (`~`):
+
+### Expression Evaluation (`scr`)
+```angelscript
+scr 1 + 1
+scr GetLocalPlayerRecord().name
+scr GetLocalPlayerRecord().hp
+scr sunit.GetDebugName()
+scr g_players.length()
+```
+
+### Statement Execution (`s`)
+```angelscript
+s print("Hello from AngelScript!");
+s GetLocalPlayerRecord().materials[0] += 50000;  // Add 50,000 gold
+s sunit.Destroy();                              // Destroy unit under crosshair
+```
+
+*(Remember: `s` and `scr` require `e_cheats 1` and a modded save profile).*
 
 ---
 
@@ -120,34 +168,11 @@ ex. patches/my_patch.patch:
 print("Hello world!");
 ```
 ---
-## Console Examples
-
-Open the in-game developer console using the tilde key (`~`):
-
-### Expression Evaluation (`scr`)
-```angelscript
-scr 1 + 1
-scr GetLocalPlayerRecord().name
-scr GetLocalPlayerRecord().hp
-scr sunit.GetDebugName()
-scr g_players.length()
-```
-
-### Statement Execution (`s`)
-```angelscript
-s print("Hello from AngelScript!");
-s GetLocalPlayerRecord().materials[0] += 50000;  // Add 50,000 gold
-s sunit.Destroy();                              // Destroy unit under crosshair
-```
-
-*(Remember: `s` and `scr` require `e_cheats 1` and a modded save profile).*
-
----
 
 ## Project Structure
 
 ```text
-root/
+patch_scr/
 ├── include/             # Header files (HookEngine.h, angelscript.h)
 ├── minhook/             # Bundled MinHook library (buffer, hook, trampoline, hde64)
 ├── src/
@@ -156,6 +181,8 @@ root/
 │   ├── winmm_proxy.cpp  # Dynamic resolution of real System32 winmm.dll
 │   └── winmm_exports.asm# MASM x64 naked export trampolines (180 functions)
 ├── build.ps1 / .bat     # Build scripts (VS2022 + MASM + MinHook)
+├── install.ps1 / .bat   # Installs winmm.dll to game root
+├── uninstall.ps1 / .bat # Removes winmm.dll from game root
 ├── winmm.def            # PE export definitions for all 180 winmm functions
 └── README.md            # This documentation
 ```
