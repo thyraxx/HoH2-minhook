@@ -48,7 +48,7 @@ To build this project from source, you need:
 ## How to Build Yourself
 
 ### 1. Build via PowerShell (Recommended)
-Open PowerShell in the `patch_scr` directory and run:
+Open PowerShell in the `root` directory and run:
 
 ```powershell
 .\build.ps1
@@ -66,7 +66,7 @@ The script will:
 build.bat
 ```
 
-Upon a successful build, `winmm.dll` will be generated in the `patch_scr` folder.
+Upon a successful build, `winmm.dll` will be generated in the `root` folder.
 
 ---
 
@@ -165,7 +165,7 @@ print("Hello world!");
 ## Project Structure
 
 ```text
-patch_scr/
+root/
 ├── include/             # Header files (HookEngine.h, angelscript.h)
 ├── minhook/             # Bundled MinHook library (buffer, hook, trampoline, hde64)
 ├── src/
