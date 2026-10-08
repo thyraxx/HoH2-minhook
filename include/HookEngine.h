@@ -29,6 +29,12 @@ struct PatchDefinition {
     std::string file;               // external snippet file path (e.g. "patches/my_patch.patch")
 };
 
+struct ModScriptRecord {
+    std::string modId;              // e.g. "CustomHooksMod" or "drop_me.bin"
+    std::string modName;            // e.g. "CustomHooksMod" or "Drop Me"
+    std::string scriptPath;         // e.g. "scripts/gui/playermenu/character.as"
+};
+
 class HookEngine {
 public:
     static void Initialize();
@@ -52,4 +58,9 @@ public:
 
     static size_t GetHookCount();
     static size_t GetPatchCount();
+    static size_t GetDiscoveredModScriptCount();
+    static void RegisterModScript(const std::string& modId, const std::string& modName, const std::string& scriptPath);
+    static void ClearDiscoveredModScripts();
+    static bool PatchModlistWindow(std::string& source);
 };
+

@@ -114,6 +114,38 @@ static const char* kMockGameModeScript =
 "    }\n"
 "}\n";
 
+static const char* kMockModlistWindowScript =
+"class ModlistWindow : AWindowObject\n"
+"{\n"
+"    Widget@ m_list;\n"
+"    bool m_closing = false;\n"
+"\n"
+"    void RefreshList()\n"
+"    {\n"
+"        for (uint i = 0; i < mods.length(); i++)\n"
+"        {\n"
+"            auto mod = mods[i].m_mod;\n"
+"            auto wNewMod = cast<AInteractableWidget>(m_modTemplate.Clone());\n"
+"            cast<TextWidget>(wNewMod.GetWidgetById(\"text\")).SetText(mod.Name);\n"
+"        }\n"
+"    }\n"
+"\n"
+"    void OnFunc(Widget@ sender, const string &in name) override\n"
+"    {\n"
+"        ResourceMod@ senderMod = null;\n"
+"        if (name == \"hover\")\n"
+"        {\n"
+"            string descText = senderMod.Description;\n"
+"            cast<TextWidget>(m_widget.GetWidgetById(\"mod-desc\")).SetText(descText);\n"
+"        }\n"
+"        else if (name == \"close\")\n"
+"        {\n"
+"            m_closing = true;\n"
+"        }\n"
+"    }\n"
+"}\n";
+
+
 // -----------------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------------
@@ -242,6 +274,59 @@ void TestHermeticHookAndPatchProcessing() {
     std::cout << "PASSED\n";
 }
 
+void TestModConflictDetectorPatching() {
+    std::cout << "[TEST] Mod Conflict Detector (ModlistWindow In-Memory Patch)... ";
+    HookEngine::ClearDiscoveredModScripts();
+    HookEngine::RegisterModScript("ModA", "Mod Alpha", "scripts/GUI/PlayerMenu/Character.as");
+    HookEngine::RegisterModScript("ModB", "Mod Beta", "scripts/GUI/PlayerMenu/Character.as");
+    HookEngine::RegisterModScript("ModC", "Mod Gamma", "scripts/Unique.as");
+
+    assert(HookEngine::GetDiscoveredModScriptCount() == 3);
+
+    std::string source = kMockModlistWindowScript;
+    bool res = HookEngine::PatchModlistWindow(source);
+    assert(res == true);
+
+    // Verify generated namespace
+    assert(source.find("namespace ModConflictDetector") != std::string::npos);
+    assert(source.find("ModScriptEntry(\"ModA\", \"Mod Alpha\", \"scripts/gui/playermenu/character.as\")") != std::string::npos);
+    assert(source.find("ModScriptEntry(\"ModB\", \"Mod Beta\", \"scripts/gui/playermenu/character.as\")") != std::string::npos);
+    assert(source.find("ModScriptEntry(\"ModC\", \"Mod Gamma\", \"scripts/unique.as\")") != std::string::npos);
+
+    // Verify Anchor 1 (badge)
+    assert(source.find("ModConflictDetector::HasConflict(mod)") != std::string::npos);
+    assert(source.find("[! Conflict]") != std::string::npos);
+
+    // Verify Anchor 2 (OnFunc null-guard & dialog callbacks)
+    assert(source.find("if (name == \"mod-conflict-warning yes\")") != std::string::npos);
+    assert(source.find("if (sender is null)") != std::string::npos);
+
+    // Verify Anchor 3 (Hover warning)
+    assert(source.find("ModConflictDetector::GetConflictWarning(senderMod)") != std::string::npos);
+
+    // Verify Anchor 4 (Close confirmation dialog)
+    assert(source.find("ModConflictDetector::GetSummaryOfActiveConflicts()") != std::string::npos);
+    assert(source.find("g_gameMode.ShowDialog") != std::string::npos);
+
+    // Test ProcessScriptSection route with ModlistWindow.as
+    std::string secOut;
+    bool secInjected = false;
+    void* mockMod = (void*)0x8888000;
+    bool secRes = HookEngine::ProcessScriptSection(
+        mockMod,
+        "scripts/GUI/ModlistWindow.as",
+        kMockModlistWindowScript,
+        strlen(kMockModlistWindowScript),
+        secOut,
+        secInjected
+    );
+    assert(secRes == true && secInjected == true);
+    assert(secOut.find("namespace ModConflictDetector") != std::string::npos);
+    HookEngine::OnModuleBuildComplete(mockMod);
+
+    std::cout << "PASSED\n";
+}
+
 void TestLiveGameAssetsIfAvailable() {
     std::cout << "[TEST] Dynamic Discovery of Unpacked Game Assets... ";
     std::string assetsDir = FindUnpackedAssetsDir();
@@ -280,6 +365,23 @@ void TestLiveGameAssetsIfAvailable() {
         std::cout << "OK\n";
     }
 
+    // Verify ModlistWindow.as
+    std::string modlistPath = assetsDir + "\\scripts\\GUI\\ModlistWindow.as";
+    std::string modlistContent = ReadFileToString(modlistPath);
+    if (!modlistContent.empty()) {
+        std::cout << "       -> Validating against real ModlistWindow.as (" << modlistContent.length() << " bytes)... ";
+        std::string out;
+        bool inj = false;
+        void* mockMod = (void*)0x9999000;
+        bool res = HookEngine::ProcessScriptSection(mockMod, "scripts/GUI/ModlistWindow.as", modlistContent.c_str(), modlistContent.length(), out, inj);
+        assert(res == true && inj == true);
+        assert(out.find("namespace ModConflictDetector") != std::string::npos);
+        assert(out.find("[! Conflict]") != std::string::npos);
+        assert(out.find("mod-conflict-warning") != std::string::npos);
+        HookEngine::OnModuleBuildComplete(mockMod);
+        std::cout << "OK\n";
+    }
+
     std::cout << "       -> Live game asset validation PASSED\n";
 }
 
@@ -291,6 +393,7 @@ int main() {
     TestSnippetNeutralization();
     TestMetadataPreprocessing();
     TestHermeticHookAndPatchProcessing();
+    TestModConflictDetectorPatching();
     TestLiveGameAssetsIfAvailable();
 
     std::cout << "\n========================================================\n";
@@ -299,3 +402,4 @@ int main() {
     std::cout << "========================================================\n";
     return 0;
 }
+

@@ -21,9 +21,25 @@ static std::vector<HookDefinition> g_HookDefinitions;
 static std::vector<PatchDefinition> g_PatchDefinitions;
 static std::unordered_set<std::string> g_RegisteredSnippetFiles;
 static std::set<void*> g_HelperInjectedModules;
+static std::vector<ModScriptRecord> g_DiscoveredModScripts;
 
 // Helpers: String manipulation
+static std::string EscapeAngelScriptString(const std::string& str) {
+    std::string out;
+    out.reserve(str.length() + 8);
+    for (char c : str) {
+        if (c == '\\') out += "\\\\";
+        else if (c == '"') out += "\\\"";
+        else if (c == '\n') out += "\\n";
+        else if (c == '\r') out += "\\r";
+        else if (c == '\t') out += "\\t";
+        else out += c;
+    }
+    return out;
+}
+
 static std::string Trim(const std::string& str) {
+
     size_t first = str.find_first_not_of(" \t\r\n");
     if (first == std::string::npos) return "";
     size_t last = str.find_last_not_of(" \t\r\n");
@@ -444,6 +460,84 @@ void HookEngine::LoadBinPackage(const std::string& binPath) {
             RegisterPatchDef(def);
         }
     }
+
+    // 3. Scan .bin package buffer for AngelScript (.as) files to detect mod conflicts
+    std::set<std::string> seenScripts;
+    const char* pBuf = (const char*)buffer.data();
+    size_t pos = 0;
+    while (pos < fileSize) {
+        if (pos + 8 >= fileSize) break;
+        if ((pBuf[pos] == 's' || pBuf[pos] == 'S') &&
+            (_strnicmp(pBuf + pos, "scripts/", 8) == 0 || _strnicmp(pBuf + pos, "scripts\\", 8) == 0))
+        {
+            size_t start = pos;
+            size_t p = start;
+            while (p < fileSize && p - start < 260) {
+                char c = pBuf[p];
+                if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                    c == '_' || c == '/' || c == '\\' || c == '.' || c == '-') {
+                    p++;
+                } else {
+                    break;
+                }
+            }
+            std::string candidate(pBuf + start, p - start);
+            std::string candLower = ToLower(candidate);
+            if (candLower.length() >= 3 && candLower.substr(candLower.length() - 3) == ".as") {
+                std::string normPath = NormalizePath(candidate);
+                if (seenScripts.insert(normPath).second) {
+                    HookEngine::RegisterModScript(modName, modName, normPath);
+                    HookEngine::RegisterModScript(GetBasename(binPath), modName, normPath);
+                }
+            }
+            pos = (p > start ? p : pos + 8);
+        } else {
+            pos++;
+        }
+    }
+}
+
+static void ScanDirectoryForScripts(
+    const std::string& baseDir,
+    const std::string& currentSubDir,
+    const std::string& modId,
+    const std::string& modName
+) {
+    std::string searchDir = currentSubDir.empty() ? baseDir : (baseDir + "\\" + currentSubDir);
+    std::string pattern = searchDir + "\\*";
+
+    WIN32_FIND_DATAA findData;
+    HANDLE hFind = FindFirstFileA(pattern.c_str(), &findData);
+    if (hFind == INVALID_HANDLE_VALUE) return;
+
+    do {
+        if (strcmp(findData.cFileName, ".") == 0 || strcmp(findData.cFileName, "..") == 0) {
+            continue;
+        }
+
+        std::string fileName = findData.cFileName;
+        std::string relPath = currentSubDir.empty() ? fileName : (currentSubDir + "/" + fileName);
+
+        if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            ScanDirectoryForScripts(baseDir, relPath, modId, modName);
+        } else {
+            std::string lowerName = ToLower(fileName);
+            if (lowerName.length() >= 3 && lowerName.substr(lowerName.length() - 3) == ".as") {
+                if (lowerName.length() >= 6 && lowerName.substr(lowerName.length() - 6) == ".patch") continue;
+                if (lowerName.length() >= 4 && lowerName.substr(lowerName.length() - 4) == ".inc") continue;
+                if (g_RegisteredSnippetFiles.count(NormalizePath(relPath)) > 0) continue;
+                if (g_RegisteredSnippetFiles.count(GetBasename(fileName)) > 0) continue;
+
+                std::string fullRelScript = "scripts/" + relPath;
+                if (ToLower(relPath).substr(0, 8) == "scripts/") {
+                    fullRelScript = relPath;
+                }
+                HookEngine::RegisterModScript(modId, modName, fullRelScript);
+            }
+        }
+    } while (FindNextFileA(hFind, &findData));
+
+    FindClose(hFind);
 }
 
 void HookEngine::ScanDirectory(const std::string& dirPath, bool isWorkshop) {
@@ -475,13 +569,25 @@ void HookEngine::ScanDirectory(const std::string& dirPath, bool isWorkshop) {
             } else {
                 // Local unpacked mod directory
                 std::string infoPath = fullPath + "\\info.xml";
+                std::string parsedModName = folderName;
                 if (GetFileAttributesA(infoPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
                     LoadConfigFile(infoPath, fullPath, folderName);
+                    std::string xmlStr = ReadFileToString(infoPath);
+                    std::regex nameRegex("<string\\s+name=[\"']name[\"']>([^<]+)</string>", std::regex::icase);
+                    std::smatch nameMatch;
+                    if (std::regex_search(xmlStr, nameMatch, nameRegex)) {
+                        parsedModName = Trim(nameMatch[1].str());
+                    }
                 }
 
                 std::string hooksXml = fullPath + "\\hooks.xml";
                 if (GetFileAttributesA(hooksXml.c_str()) != INVALID_FILE_ATTRIBUTES) {
                     LoadConfigFile(hooksXml, fullPath, folderName);
+                }
+
+                std::string scriptsDir = fullPath + "\\scripts";
+                if (GetFileAttributesA(scriptsDir.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                    ScanDirectoryForScripts(scriptsDir, "", folderName, parsedModName);
                 }
 
                 // Check for packed .bin packages inside mod folder
@@ -510,6 +616,7 @@ void HookEngine::LoadAllConfigurations() {
     g_HookDefinitions.clear();
     g_PatchDefinitions.clear();
     g_RegisteredSnippetFiles.clear();
+    g_DiscoveredModScripts.clear();
 
     // 1. Root configuration files
     if (GetFileAttributesA("info.xml") != INVALID_FILE_ATTRIBUTES) LoadConfigFile("info.xml", "", "RootMod");
@@ -536,9 +643,10 @@ void HookEngine::LoadAllConfigurations() {
         }
     }
 
-    Log("[HookEngine] Configurations loaded: %zu dynamic hooks, %zu line patches, %zu snippet files registered",
-        g_HookDefinitions.size(), g_PatchDefinitions.size(), g_RegisteredSnippetFiles.size());
+    Log("[HookEngine] Configurations loaded: %zu dynamic hooks, %zu line patches, %zu snippet files, %zu mod scripts registered",
+        g_HookDefinitions.size(), g_PatchDefinitions.size(), g_RegisteredSnippetFiles.size(), g_DiscoveredModScripts.size());
 }
+
 
 void HookEngine::Initialize() {
     LoadAllConfigurations();
@@ -699,7 +807,20 @@ bool HookEngine::ProcessScriptSection(
             pModule, sectionName ? sectionName : "<unknown>");
     }
 
+    // Mod Conflict Detector: In-memory patch of ModlistWindow.as
+    if (secStr.find("modlistwindow.as") != std::string::npos) {
+        if (PatchModlistWindow(source)) {
+            modified = true;
+            outInjectedHooksOrPatches = true;
+            Log("[HookEngine] Injected Mod Conflict Detector into %s", sectionName ? sectionName : "<unknown>");
+            if (g_ConsolePrint) {
+                g_ConsolePrint(CONSOLE_CHANNEL_INFO, "[HookEngine] Injected Mod Conflict Detector into ModlistWindow\n");
+            }
+        }
+    }
+
     // 1. Inject Dynamic Hooks (Hooks::Call)
+
     for (const auto& def : g_HookDefinitions) {
         size_t searchPos = 0;
         if (!def.targetClass.empty()) {
@@ -922,4 +1043,273 @@ size_t HookEngine::GetHookCount() {
 
 size_t HookEngine::GetPatchCount() {
     return g_PatchDefinitions.size();
+}
+
+size_t HookEngine::GetDiscoveredModScriptCount() {
+    return g_DiscoveredModScripts.size();
+}
+
+void HookEngine::RegisterModScript(const std::string& modId, const std::string& modName, const std::string& scriptPath) {
+    if (modId.empty() || scriptPath.empty()) return;
+    std::string normPath = NormalizePath(scriptPath);
+    for (const auto& rec : g_DiscoveredModScripts) {
+        if (_stricmp(rec.modId.c_str(), modId.c_str()) == 0 &&
+            _stricmp(rec.scriptPath.c_str(), normPath.c_str()) == 0) {
+            return;
+        }
+    }
+    ModScriptRecord rec;
+    rec.modId = modId;
+    rec.modName = modName.empty() ? modId : modName;
+    rec.scriptPath = normPath;
+    g_DiscoveredModScripts.push_back(rec);
+}
+
+void HookEngine::ClearDiscoveredModScripts() {
+    g_DiscoveredModScripts.clear();
+}
+
+static std::string GenerateModConflictDetectorCode() {
+    std::stringstream ss;
+    ss << "\n// [HookEngine] Mod Conflict Detector\n";
+    ss << "namespace ModConflictDetector\n{\n";
+    ss << "\tclass ModScriptEntry\n\t{\n";
+    ss << "\t\tstring modId;\n";
+    ss << "\t\tstring modName;\n";
+    ss << "\t\tstring scriptPath;\n\n";
+    ss << "\t\tModScriptEntry(const string &in id, const string &in name, const string &in path)\n";
+    ss << "\t\t{\n";
+    ss << "\t\t\tmodId = id;\n";
+    ss << "\t\t\tmodName = name;\n";
+    ss << "\t\t\tscriptPath = path;\n";
+    ss << "\t\t}\n";
+    ss << "\t}\n\n";
+    ss << "\tarray<ModScriptEntry@> g_modScripts;\n";
+    ss << "\tbool g_initialized = false;\n\n";
+    ss << "\tvoid Initialize()\n\t{\n";
+    ss << "\t\tif (g_initialized)\n\t\t\treturn;\n";
+    ss << "\t\tg_initialized = true;\n";
+
+    for (const auto& rec : g_DiscoveredModScripts) {
+        ss << "\t\tg_modScripts.insertLast(ModScriptEntry(\""
+           << EscapeAngelScriptString(rec.modId) << "\", \""
+           << EscapeAngelScriptString(rec.modName) << "\", \""
+           << EscapeAngelScriptString(rec.scriptPath) << "\"));\n";
+    }
+
+    ss << "\t}\n\n";
+
+    ss << "\tbool ModMatches(ResourceMod@ mod, const string &in targetId, const string &in targetName)\n\t{\n";
+    ss << "\t\tif (mod is null)\n\t\t\treturn false;\n";
+    ss << "\t\tstring mId = mod.ID.toLower();\n";
+    ss << "\t\tstring mName = mod.Name.toLower();\n";
+    ss << "\t\tstring tId = targetId.toLower();\n";
+    ss << "\t\tstring tName = targetName.toLower();\n";
+    ss << "\t\tif (mId == tId || mName == tName)\n\t\t\treturn true;\n";
+    ss << "\t\tif (tId.length() >= 4 && tId.substr(tId.length() - 4) == \".bin\" && mId == tId.substr(0, tId.length() - 4))\n\t\t\treturn true;\n";
+    ss << "\t\tif (mId.length() >= 4 && mId.substr(mId.length() - 4) == \".bin\" && mId.substr(0, mId.length() - 4) == tId)\n\t\t\treturn true;\n";
+    ss << "\t\treturn false;\n";
+    ss << "\t}\n\n";
+
+    ss << "\tbool IsModActiveOnProfile(const string &in targetId, const string &in targetName)\n\t{\n";
+    ss << "\t\tauto enabledMods = PersistentSaves::GetEnabledResourceMods();\n";
+    ss << "\t\tif (enabledMods is null)\n\t\t\treturn false;\n";
+    ss << "\t\tfor (uint k = 0; k < enabledMods.length(); k++)\n\t\t{\n";
+    ss << "\t\t\tif (ModMatches(enabledMods[k], targetId, targetName))\n\t\t\t\treturn true;\n";
+    ss << "\t\t}\n";
+    ss << "\t\treturn false;\n";
+    ss << "\t}\n\n";
+
+    ss << "\tbool HasConflict(ResourceMod@ targetMod)\n\t{\n";
+    ss << "\t\tInitialize();\n";
+    ss << "\t\tif (targetMod is null)\n\t\t\treturn false;\n";
+    ss << "\t\tauto enabledMods = PersistentSaves::GetEnabledResourceMods();\n";
+    ss << "\t\tif (enabledMods is null || enabledMods.length() == 0)\n\t\t\treturn false;\n";
+    ss << "\t\tfor (uint i = 0; i < g_modScripts.length(); i++)\n\t\t{\n";
+    ss << "\t\t\tauto ms = g_modScripts[i];\n";
+    ss << "\t\t\tif (!ModMatches(targetMod, ms.modId, ms.modName))\n\t\t\t\tcontinue;\n";
+    ss << "\t\t\tfor (uint j = 0; j < g_modScripts.length(); j++)\n\t\t\t{\n";
+    ss << "\t\t\t\tif (i == j)\n\t\t\t\t\tcontinue;\n";
+    ss << "\t\t\t\tauto other = g_modScripts[j];\n";
+    ss << "\t\t\t\tif (other.scriptPath.toLower() != ms.scriptPath.toLower())\n\t\t\t\t\tcontinue;\n";
+    ss << "\t\t\t\tif (ModMatches(targetMod, other.modId, other.modName))\n\t\t\t\t\tcontinue;\n";
+    ss << "\t\t\t\tif (IsModActiveOnProfile(other.modId, other.modName))\n\t\t\t\t\treturn true;\n";
+    ss << "\t\t\t}\n";
+    ss << "\t\t}\n";
+    ss << "\t\treturn false;\n";
+    ss << "\t}\n\n";
+
+    ss << "\tstring GetConflictWarning(ResourceMod@ targetMod)\n\t{\n";
+    ss << "\t\tInitialize();\n";
+    ss << "\t\tif (targetMod is null)\n\t\t\treturn \"\";\n";
+    ss << "\t\tauto enabledMods = PersistentSaves::GetEnabledResourceMods();\n";
+    ss << "\t\tif (enabledMods is null || enabledMods.length() == 0)\n\t\t\treturn \"\";\n";
+    ss << "\t\tbool isTargetEnabled = PersistentSaves::IsModEnabled(targetMod);\n";
+    ss << "\t\tarray<string> clashList;\n";
+    ss << "\t\tfor (uint i = 0; i < g_modScripts.length(); i++)\n\t\t{\n";
+    ss << "\t\t\tauto ms = g_modScripts[i];\n";
+    ss << "\t\t\tif (!ModMatches(targetMod, ms.modId, ms.modName))\n\t\t\t\tcontinue;\n";
+    ss << "\t\t\tfor (uint j = 0; j < g_modScripts.length(); j++)\n\t\t\t{\n";
+    ss << "\t\t\t\tif (i == j)\n\t\t\t\t\tcontinue;\n";
+    ss << "\t\t\t\tauto other = g_modScripts[j];\n";
+    ss << "\t\t\t\tif (other.scriptPath.toLower() != ms.scriptPath.toLower())\n\t\t\t\t\tcontinue;\n";
+    ss << "\t\t\t\tif (ModMatches(targetMod, other.modId, other.modName))\n\t\t\t\t\tcontinue;\n";
+    ss << "\t\t\t\tif (IsModActiveOnProfile(other.modId, other.modName))\n\t\t\t\t{\n";
+    ss << "\t\t\t\t\tstring entry = \" - \" + ms.scriptPath + \" (clashes with: \" + other.modName + \")\";\n";
+    ss << "\t\t\t\t\tbool exists = false;\n";
+    ss << "\t\t\t\t\tfor (uint c = 0; c < clashList.length(); c++)\n\t\t\t\t\t{\n";
+    ss << "\t\t\t\t\t\tif (clashList[c] == entry) { exists = true; break; }\n";
+    ss << "\t\t\t\t\t}\n";
+    ss << "\t\t\t\t\tif (!exists)\n\t\t\t\t\t\tclashList.insertLast(entry);\n";
+    ss << "\t\t\t\t}\n";
+    ss << "\t\t\t}\n";
+    ss << "\t\t}\n";
+    ss << "\t\tif (clashList.length() == 0)\n\t\t\treturn \"\";\n\n";
+    ss << "\t\tstring warning = \"\";\n";
+    ss << "\t\tif (isTargetEnabled)\n";
+    ss << "\t\t{\n";
+    ss << "\t\t\twarning = \"\\\\cff2222[!] SCRIPT FILE CONFLICT DETECTED\\\\d\\n\" +\n";
+    ss << "\t\t\t          \"This enabled mod overwrites AngelScript files also provided by other enabled mods:\\n\";\n";
+    ss << "\t\t}\n";
+    ss << "\t\telse\n";
+    ss << "\t\t{\n";
+    ss << "\t\t\twarning = \"\\\\cffaa22[!] SCRIPT FILE CONFLICT (IF ENABLED)\\\\d\\n\" +\n";
+    ss << "\t\t\t          \"Enabling this mod will overwrite AngelScript files with currently enabled mods:\\n\";\n";
+    ss << "\t\t}\n";
+    ss << "\t\tfor (uint c = 0; c < clashList.length(); c++)\n\t\t{\n";
+    ss << "\t\t\twarning += clashList[c] + \"\\n\";\n";
+    ss << "\t\t}\n";
+    ss << "\t\treturn warning;\n";
+    ss << "\t}\n\n";
+
+    ss << "\tstring GetSummaryOfActiveConflicts()\n\t{\n";
+    ss << "\t\tInitialize();\n";
+    ss << "\t\tauto enabledMods = PersistentSaves::GetEnabledResourceMods();\n";
+    ss << "\t\tif (enabledMods is null || enabledMods.length() < 2)\n\t\t\treturn \"\";\n";
+    ss << "\t\tarray<string> conflictLines;\n";
+    ss << "\t\tfor (uint i = 0; i < g_modScripts.length(); i++)\n\t\t{\n";
+    ss << "\t\t\tauto ms1 = g_modScripts[i];\n";
+    ss << "\t\t\tif (!IsModActiveOnProfile(ms1.modId, ms1.modName))\n\t\t\t\tcontinue;\n";
+    ss << "\t\t\tfor (uint j = i + 1; j < g_modScripts.length(); j++)\n\t\t\t{\n";
+    ss << "\t\t\t\tauto ms2 = g_modScripts[j];\n";
+    ss << "\t\t\t\tif (ms1.scriptPath.toLower() != ms2.scriptPath.toLower())\n\t\t\t\t\tcontinue;\n";
+    ss << "\t\t\t\tif (ms1.modId.toLower() == ms2.modId.toLower())\n\t\t\t\t\tcontinue;\n";
+    ss << "\t\t\t\tif (!IsModActiveOnProfile(ms2.modId, ms2.modName))\n\t\t\t\t\tcontinue;\n";
+    ss << "\t\t\t\tstring line = \"* \" + ms1.scriptPath + \" (\" + ms1.modName + \" vs \" + ms2.modName + \")\";\n";
+    ss << "\t\t\t\tbool exists = false;\n";
+    ss << "\t\t\t\tfor (uint c = 0; c < conflictLines.length(); c++)\n\t\t\t\t{\n";
+    ss << "\t\t\t\t\tif (conflictLines[c] == line) { exists = true; break; }\n";
+    ss << "\t\t\t\t}\n";
+    ss << "\t\t\t\tif (!exists)\n\t\t\t\t\tconflictLines.insertLast(line);\n";
+    ss << "\t\t\t}\n";
+    ss << "\t\t}\n";
+    ss << "\t\tif (conflictLines.length() == 0)\n\t\t\treturn \"\";\n\n";
+    ss << "\t\tstring summary = \"\";\n";
+    ss << "\t\tuint maxShow = 6;\n";
+    ss << "\t\tuint countToShow = conflictLines.length() < maxShow ? conflictLines.length() : maxShow;\n";
+    ss << "\t\tfor (uint c = 0; c < countToShow; c++)\n\t\t{\n";
+    ss << "\t\t\tsummary += conflictLines[c] + \"\\n\";\n";
+    ss << "\t\t}\n";
+    ss << "\t\tif (conflictLines.length() > maxShow)\n\t\t{\n";
+    ss << "\t\t\tsummary += \"... and \" + (conflictLines.length() - maxShow) + \" more file(s)\\n\";\n";
+    ss << "\t\t}\n";
+    ss << "\t\treturn summary;\n";
+    ss << "\t}\n";
+    ss << "}\n\n";
+    return ss.str();
+}
+
+bool HookEngine::PatchModlistWindow(std::string& source) {
+    if (source.find("class ModlistWindow") == std::string::npos) {
+        return false;
+    }
+
+    bool anyPatched = false;
+
+    // Anchor 1: Badge in RefreshList()
+    const std::string kBadgeTarget = "cast<TextWidget>(wNewMod.GetWidgetById(\"text\")).SetText(mod.Name);";
+    size_t posBadge = source.find(kBadgeTarget);
+    if (posBadge != std::string::npos) {
+        std::string badgeReplacement =
+            "string displayName = mod.Name;\n"
+            "\t\t\tif (PersistentSaves::IsModEnabled(mod) && ModConflictDetector::HasConflict(mod))\n"
+            "\t\t\t\tdisplayName += \" \\cff2222[! Conflict]\\d\";\n"
+            "\t\t\tcast<TextWidget>(wNewMod.GetWidgetById(\"text\")).SetText(displayName);";
+        source.replace(posBadge, kBadgeTarget.length(), badgeReplacement);
+        anyPatched = true;
+    }
+
+    // Anchor 2: Null-guard and Dialog callback handling in OnFunc
+    const std::string kOnFuncHeader = "void OnFunc(Widget@ sender, const string &in name) override";
+    size_t posOnFunc = source.find(kOnFuncHeader);
+    if (posOnFunc != std::string::npos) {
+        size_t openBrace = source.find('{', posOnFunc);
+        if (openBrace != std::string::npos) {
+            std::string dialogGuard =
+                "\n\t\tif (name == \"mod-conflict-warning yes\")\n"
+                "\t\t{\n"
+                "\t\t\tm_closing = true;\n"
+                "\t\t\treturn;\n"
+                "\t\t}\n"
+                "\t\telse if (name == \"mod-conflict-warning\" || name == \"mod-conflict-warning no\")\n"
+                "\t\t{\n"
+                "\t\t\treturn;\n"
+                "\t\t}\n"
+                "\t\tif (sender is null)\n"
+                "\t\t\treturn;\n";
+            source.insert(openBrace + 1, dialogGuard);
+            anyPatched = true;
+        }
+    }
+
+    // Anchor 3: Hover description warning in OnFunc("hover")
+    const std::string kDescTarget = "cast<TextWidget>(m_widget.GetWidgetById(\"mod-desc\")).SetText(descText);";
+    size_t posDesc = source.find(kDescTarget);
+    if (posDesc != std::string::npos) {
+        std::string descReplacement =
+            "string conflictWarn = ModConflictDetector::GetConflictWarning(senderMod);\n"
+            "\t\t\tif (!conflictWarn.isEmpty())\n"
+            "\t\t\t\tdescText += \"\\n\\n\" + conflictWarn;\n"
+            "\t\t\tcast<TextWidget>(m_widget.GetWidgetById(\"mod-desc\")).SetText(descText);";
+        source.replace(posDesc, kDescTarget.length(), descReplacement);
+        anyPatched = true;
+    }
+
+    // Anchor 4: Intercept "close" to show confirmation dialog if conflicts exist
+    size_t posClose = source.find("name == \"close\"");
+    if (posClose != std::string::npos) {
+        size_t openBrace = source.find('{', posClose);
+        if (openBrace != std::string::npos) {
+            size_t closeBrace = FindMatchingClosingBrace(source, openBrace);
+            if (closeBrace != std::string::npos) {
+                std::string closeBody =
+                    "{\n"
+                    "\t\t\tstring conflictsSummary = ModConflictDetector::GetSummaryOfActiveConflicts();\n"
+                    "\t\t\tif (!conflictsSummary.isEmpty() && g_gameMode !is null)\n"
+                    "\t\t\t{\n"
+                    "\t\t\t\tg_gameMode.ShowDialog(\n"
+                    "\t\t\t\t\t\"mod-conflict-warning\",\n"
+                    "\t\t\t\t\t\"WARNING: Mod Conflicts Detected!\\n\\nMultiple enabled mods overwrite the same AngelScript (.as) files:\\n\\n\" + conflictsSummary + \"\\nAre you sure you want to continue?\",\n"
+                    "\t\t\t\t\t\"Continue\",\n"
+                    "\t\t\t\t\t\"Go Back\",\n"
+                    "\t\t\t\t\tthis\n"
+                    "\t\t\t\t);\n"
+                    "\t\t\t}\n"
+                    "\t\t\telse\n"
+                    "\t\t\t{\n"
+                    "\t\t\t\tm_closing = true;\n"
+                    "\t\t\t}\n"
+                    "\t\t}";
+                source.replace(openBrace, closeBrace - openBrace + 1, closeBody);
+                anyPatched = true;
+            }
+        }
+    }
+
+    if (anyPatched) {
+        source = GenerateModConflictDetectorCode() + "\n" + source;
+        return true;
+    }
+
+    return false;
 }
