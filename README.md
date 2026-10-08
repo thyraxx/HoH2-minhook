@@ -82,30 +82,6 @@ Because `HWR2.exe` was never touched, deleting `winmm.dll` completely restores t
 
 ---
 
-## Console Examples
-
-Open the in-game developer console using the tilde key (`~`):
-
-### Expression Evaluation (`scr`)
-```angelscript
-scr 1 + 1
-scr GetLocalPlayerRecord().name
-scr GetLocalPlayerRecord().hp
-scr sunit.GetDebugName()
-scr g_players.length()
-```
-
-### Statement Execution (`s`)
-```angelscript
-s print("Hello from AngelScript!");
-s GetLocalPlayerRecord().materials[0] += 50000;  // Add 50,000 gold
-s sunit.Destroy();                              // Destroy unit under crosshair
-```
-
-*(Remember: `s` and `scr` require `e_cheats 1` and a modded save profile).*
-
----
-
 ## Mod XML Configuration Examples
 
 Place your mod folder in `mods/<ModName>/`:
@@ -144,6 +120,29 @@ ex. patches/my_patch.patch:
 print("Hello world!");
 ```
 ---
+## Console Examples
+
+Open the in-game developer console using the tilde key (`~`):
+
+### Expression Evaluation (`scr`)
+```angelscript
+scr 1 + 1
+scr GetLocalPlayerRecord().name
+scr GetLocalPlayerRecord().hp
+scr sunit.GetDebugName()
+scr g_players.length()
+```
+
+### Statement Execution (`s`)
+```angelscript
+s print("Hello from AngelScript!");
+s GetLocalPlayerRecord().materials[0] += 50000;  // Add 50,000 gold
+s sunit.Destroy();                              // Destroy unit under crosshair
+```
+
+*(Remember: `s` and `scr` require `e_cheats 1` and a modded save profile).*
+
+---
 
 ## Project Structure
 
@@ -157,8 +156,6 @@ root/
 │   ├── winmm_proxy.cpp  # Dynamic resolution of real System32 winmm.dll
 │   └── winmm_exports.asm# MASM x64 naked export trampolines (180 functions)
 ├── build.ps1 / .bat     # Build scripts (VS2022 + MASM + MinHook)
-├── install.ps1 / .bat   # Installs winmm.dll to game root
-├── uninstall.ps1 / .bat # Removes winmm.dll from game root
 ├── winmm.def            # PE export definitions for all 180 winmm functions
 └── README.md            # This documentation
 ```
