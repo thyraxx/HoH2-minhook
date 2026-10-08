@@ -901,7 +901,7 @@ void HookEngine::RegisterModHooks(void* pScriptSys, void* pModule) {
             Log("[HookEngine] Registered mod hook '%s' (%p) into ScriptSystem (%p)",
                 def.hookName.c_str(), func, pScriptSys);
             if (g_ConsolePrint) {
-                g_ConsolePrint(0, "\\c00ffaa[HookEngine]\\d Registered custom hook: %s\n", def.hookName.c_str());
+                g_ConsolePrint(CONSOLE_CHANNEL_INFO, "[HookEngine] Registered custom hook: %s\n", def.hookName.c_str());
             }
         } else {
             Log("[HookEngine] Hook subscriber '%s' not present in module '%s' (mod '%s' may not be active on current profile)",

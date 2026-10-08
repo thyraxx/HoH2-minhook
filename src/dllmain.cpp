@@ -135,7 +135,7 @@ static int __fastcall Hooked_AddScriptSection(
         Log("[HookEngine] Section '%s' injected with custom hooks/patches! (size: %zu -> %zu)",
             sectionName ? sectionName : "<null>", actualLen, modifiedCode.length());
         if (g_ConsolePrint && injectedHooksOrPatches) {
-            g_ConsolePrint(0, "\\c00ffaa[HookEngine]\\d Injected custom hooks/patches into %s\n",
+            g_ConsolePrint(CONSOLE_CHANNEL_INFO, "[HookEngine] Injected custom hooks/patches into %s\n",
                 sectionName ? sectionName : "");
         }
         return g_OriginalAddScriptSection(
@@ -169,7 +169,7 @@ static void __fastcall Hooked_ResourceTaskLambda(void* thisPtr, void* pContext) 
         if ((uintptr_t)pResource < 0x10000) {
             Log("[Crash Guard] Prevented crash: invalid resource pointer %p at 0x7BAD0 during reload.", pResource);
             if (g_ConsolePrint) {
-                g_ConsolePrint(0, "\\c00ffaa[Crash Guard]\\d Prevented crash at 0x7BAF1 (invalid resource pointer %p during reload)\n", pResource);
+                g_ConsolePrint(CONSOLE_CHANNEL_WARNING, "[Crash Guard] Prevented crash at 0x7BAF1 (invalid resource pointer %p during reload)\n", pResource);
             }
             return;
         }
@@ -180,7 +180,7 @@ static void __fastcall Hooked_ResourceTaskLambda(void* thisPtr, void* pContext) 
         DWORD exc = GetExceptionCode();
         Log("[Crash Guard] Intercepted access violation (0x%08X) at 0x7BAF1 during reload! Crash prevented.", exc);
         if (g_ConsolePrint) {
-            g_ConsolePrint(0, "\\c00ffaa[Crash Guard]\\d Successfully prevented game crash! (Access Violation 0x%08X intercepted at 0x7BAF1)\n", exc);
+            g_ConsolePrint(CONSOLE_CHANNEL_WARNING, "[Crash Guard] Successfully prevented game crash! (Access Violation 0x%08X intercepted at 0x7BAF1)\n", exc);
         }
     }
 }
@@ -195,7 +195,7 @@ static void __fastcall Hooked_SecondaryTaskLambda(void* thisPtr, void* pContext)
         if ((uintptr_t)pObj < 0x10000) {
             Log("[Crash Guard] Prevented crash: invalid secondary pointer %p at 0x7BB40 during reload.", pObj);
             if (g_ConsolePrint) {
-                g_ConsolePrint(0, "\\c00ffaa[Crash Guard]\\d Prevented crash at 0x7BB40 (invalid pointer %p during reload)\n", pObj);
+                g_ConsolePrint(CONSOLE_CHANNEL_WARNING, "[Crash Guard] Prevented crash at 0x7BB40 (invalid pointer %p during reload)\n", pObj);
             }
             return;
         }
@@ -206,7 +206,7 @@ static void __fastcall Hooked_SecondaryTaskLambda(void* thisPtr, void* pContext)
         DWORD exc = GetExceptionCode();
         Log("[Crash Guard] Intercepted access violation (0x%08X) at 0x7BB40 during reload! Crash prevented.", exc);
         if (g_ConsolePrint) {
-            g_ConsolePrint(0, "\\c00ffaa[Crash Guard]\\d Successfully prevented game crash! (Access Violation 0x%08X intercepted at 0x7BB40)\n", exc);
+            g_ConsolePrint(CONSOLE_CHANNEL_WARNING, "[Crash Guard] Successfully prevented game crash! (Access Violation 0x%08X intercepted at 0x7BB40)\n", exc);
         }
     }
 }
@@ -492,7 +492,7 @@ static void ExecuteScriptInternal(void* engine, const std::string& snippet, bool
     if (!mod) {
         Log("[Patch Error] Failed to obtain any script module.");
         if (g_ConsolePrint) {
-            g_ConsolePrint(0, "\\cff4444[Patch Error] Failed to obtain script module.\\d\n");
+            g_ConsolePrint(CONSOLE_CHANNEL_ERROR, "[Patch Error] Failed to obtain script module.\n");
         }
         return;
     }
@@ -536,7 +536,7 @@ static void ExecuteScriptInternal(void* engine, const std::string& snippet, bool
     if (r < 0 || !func) {
         Log("[Patch Error] Compile failed with error code %d", r);
         if (g_ConsolePrint) {
-            g_ConsolePrint(0, "\\cff4444[AngelScript Compile Error] Failed to compile code (code %d)\\d\n", r);
+            g_ConsolePrint(CONSOLE_CHANNEL_ERROR, "[AngelScript Compile Error] Failed to compile code (code %d)\n", r);
         }
         return;
     }
@@ -550,7 +550,7 @@ static void ExecuteScriptInternal(void* engine, const std::string& snippet, bool
     if (!ctx) {
         Log("[Patch Error] Failed to obtain script context.");
         if (g_ConsolePrint) {
-            g_ConsolePrint(0, "\\cff4444[Patch Error] Failed to create execution context.\\d\n");
+            g_ConsolePrint(CONSOLE_CHANNEL_ERROR, "[Patch Error] Failed to create execution context.\n");
         }
         Module_RemoveFunction(mod, func);
         return;
@@ -566,18 +566,18 @@ static void ExecuteScriptInternal(void* engine, const std::string& snippet, bool
             int line = Context_GetExceptionLineNumber(ctx);
             Log("[Patch Exception] Line %d: %s", line, exStr ? exStr : "Unknown");
             if (g_ConsolePrint) {
-                g_ConsolePrint(0, "\\cff4444[AngelScript Exception] Line %d: %s\\d\n", line, exStr ? exStr : "Unknown");
+                g_ConsolePrint(CONSOLE_CHANNEL_ERROR, "[AngelScript Exception] Line %d: %s\n", line, exStr ? exStr : "Unknown");
             }
         } else if (exec_r != 0) { // not asEXECUTION_FINISHED
             Log("[Patch Warning] Execution status: %d", exec_r);
             if (g_ConsolePrint) {
-                g_ConsolePrint(0, "\\cffaa44[AngelScript Warning] Execution status: %d\\d\n", exec_r);
+                g_ConsolePrint(CONSOLE_CHANNEL_WARNING, "[AngelScript Warning] Execution status: %d\n", exec_r);
             }
         }
     } else {
         Log("[Patch Error] Context Prepare failed (code %d)", prep_r);
         if (g_ConsolePrint) {
-            g_ConsolePrint(0, "\\cff4444[AngelScript Error] Prepare failed (code %d)\\d\n", prep_r);
+            g_ConsolePrint(CONSOLE_CHANNEL_ERROR, "[AngelScript Error] Prepare failed (code %d)\n", prep_r);
         }
     }
 
@@ -596,7 +596,7 @@ static void SafeExecuteSnippet(void* engine, const std::string& snippet, bool is
         DWORD code = GetExceptionCode();
         Log("[Patch SEH] Catastrophic exception caught in ExecuteScriptSnippet! Code=0x%08X", code);
         if (g_ConsolePrint) {
-            g_ConsolePrint(0, "\\cff4444[Patch SEH Error] Access violation caught (0x%08X). Crash prevented.\\d\n", code);
+            g_ConsolePrint(CONSOLE_CHANNEL_ERROR, "[Patch SEH Error] Access violation caught (0x%08X). Crash prevented.\n", code);
         }
     }
 }
@@ -609,13 +609,13 @@ static void ExecuteScriptSnippet(void* pConsole, const std::string& snippet, boo
     if (snippet == "__engines") {
         void* active = GetScriptEngine(pConsole);
         if (g_ConsolePrint) {
-            g_ConsolePrint(0, "\\c00ffffCaptured AngelScript Engines (%zu):\\d\n", g_CapturedEngines.size());
+            g_ConsolePrint(CONSOLE_CHANNEL_INFO, "Captured AngelScript Engines (%zu):\n", g_CapturedEngines.size());
             for (size_t i = 0; i < g_CapturedEngines.size(); i++) {
-                g_ConsolePrint(0, "  [%zu] %p %s%s\n",
+                g_ConsolePrint(CONSOLE_CHANNEL_INFO, "  [%zu] %p %s%s\n",
                     i,
                     g_CapturedEngines[i],
-                    (g_CapturedEngines[i] == active ? "\\c00ff00[ACTIVE]\\d " : ""),
-                    ((int)i == g_ForcedEngineIndex ? "\\cffff00[FORCED]\\d" : ""));
+                    (g_CapturedEngines[i] == active ? "[ACTIVE] " : ""),
+                    ((int)i == g_ForcedEngineIndex ? "[FORCED]" : ""));
             }
         }
         return;
@@ -627,16 +627,16 @@ static void ExecuteScriptSnippet(void* pConsole, const std::string& snippet, boo
         if (idx >= 0 && idx < (int)g_CapturedEngines.size()) {
             g_ForcedEngineIndex = idx;
             if (g_ConsolePrint) {
-                g_ConsolePrint(0, "\\c00ff00Forced script engine to [%d] %p\\d\n", idx, g_CapturedEngines[idx]);
+                g_ConsolePrint(CONSOLE_CHANNEL_INFO, "Forced script engine to [%d] %p\n", idx, g_CapturedEngines[idx]);
             }
         } else if (idx == -1) {
             g_ForcedEngineIndex = -1;
             if (g_ConsolePrint) {
-                g_ConsolePrint(0, "\\c00ff00Reset to automatic active engine detection\\d\n");
+                g_ConsolePrint(CONSOLE_CHANNEL_INFO, "Reset to automatic active engine detection\n");
             }
         } else {
             if (g_ConsolePrint) {
-                g_ConsolePrint(0, "\\cff4444Invalid engine index %d (available: 0..%zu)\\d\n", idx, g_CapturedEngines.size() - 1);
+                g_ConsolePrint(CONSOLE_CHANNEL_ERROR, "Invalid engine index %d (available: 0..%zu)\n", idx, g_CapturedEngines.size() - 1);
             }
         }
         return;
@@ -646,7 +646,7 @@ static void ExecuteScriptSnippet(void* pConsole, const std::string& snippet, boo
     if (!engine) {
         Log("[Patch Error] AngelScript engine is null.");
         if (g_ConsolePrint) {
-            g_ConsolePrint(0, "\\cff4444[Patch Error] AngelScript engine is not available yet.\\d\n");
+            g_ConsolePrint(CONSOLE_CHANNEL_ERROR, "[Patch Error] AngelScript engine is not available yet.\n");
         }
         return;
     }
@@ -678,19 +678,19 @@ static void Hooked_ConsoleExecuteLine(void* pConsole, StdString* pLine) {
 
                 // Echo the command in the console: "> s <code>"
                 if (g_ConsolePrint) {
-                    g_ConsolePrint(0, "> %s\n", str);
+                    g_ConsolePrint(CONSOLE_CHANNEL_INFO, "> %s\n", str);
                 }
 
                 if (!IsProfileModded()) {
                     if (g_ConsolePrint) {
-                        g_ConsolePrint(0, "\\cff5555[Error]\\d Command '%s' can only be executed on a modded profile.\n", is_scr ? "scr" : "s");
+                        g_ConsolePrint(CONSOLE_CHANNEL_ERROR, "[Error] Command '%s' can only be executed on a modded profile.\n", is_scr ? "scr" : "s");
                     }
                     return;
                 }
 
                 if (!IsCheatsEnabled()) {
                     if (g_ConsolePrint) {
-                        g_ConsolePrint(0, "\\cff5555[Error]\\d Command '%s' can only be executed when e_cheats = 1.\n", is_scr ? "scr" : "s");
+                        g_ConsolePrint(CONSOLE_CHANNEL_ERROR, "[Error] Command '%s' can only be executed when e_cheats = 1.\n", is_scr ? "scr" : "s");
                     }
                     return;
                 }
@@ -699,7 +699,7 @@ static void Hooked_ConsoleExecuteLine(void* pConsole, StdString* pLine) {
                     ExecuteScriptSnippet(pConsole, code, is_scr);
                 } else {
                     if (g_ConsolePrint) {
-                        g_ConsolePrint(0, "\\c8888ffUsage: %s <AngelScript code>\\d\n", is_scr ? "scr" : "s");
+                        g_ConsolePrint(CONSOLE_CHANNEL_WARNING, "Usage: %s <AngelScript code>\n", is_scr ? "scr" : "s");
                     }
                 }
                 return; // Handled! Do not fall through to "No such cvar"

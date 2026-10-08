@@ -4,6 +4,12 @@
 #include <unordered_set>
 #include <set>
 
+enum ConsoleChannel {
+    CONSOLE_CHANNEL_INFO    = 0, // White
+    CONSOLE_CHANNEL_WARNING = 1, // Yellow
+    CONSOLE_CHANNEL_ERROR   = 2  // Red
+};
+
 struct HookDefinition {
     std::string modName;            // e.g. "MyMod"
     std::string targetClass;        // e.g. "Player"

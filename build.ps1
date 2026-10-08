@@ -1,5 +1,7 @@
 $ErrorActionPreference = "Stop"
 
+Set-Location (Split-Path -Parent $MyInvocation.MyCommand.Path)
+
 $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 if (!(Test-Path $vsWhere)) {
     Write-Error "vswhere.exe not found at $vsWhere"

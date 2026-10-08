@@ -1,3 +1,4 @@
+Set-Location (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $target = "..\winmm.dll"
 $src = "winmm.dll"
 
