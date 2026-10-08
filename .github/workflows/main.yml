@@ -1,0 +1,64 @@
+name: Build and Test Proxy DLL
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Setup MSVC x64 Environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Run Hermetic Unit Tests
+        shell: pwsh
+        run: |
+          .\tests\run_tests.ps1
+
+      - name: Build winmm.dll
+        shell: pwsh
+        run: |
+          .\build.ps1
+
+      - name: Verify Artifact Exists
+        shell: pwsh
+        run: |
+          if (!(Test-Path "winmm.dll")) {
+            Write-Error "Build artifact winmm.dll does not exist!"
+          }
+          $bytes = (Get-Item "winmm.dll").Length
+          Write-Host "[SUCCESS] winmm.dll successfully built ($bytes bytes)"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: winmm-dll
+          path: winmm.dll
+          retention-days: 30
+
+      - name: Upload to Release (On Tag Push)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: winmm.dll
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
