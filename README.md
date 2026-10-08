@@ -158,6 +158,19 @@ Place your mod folder in `mods/<ModName>/`:
             <string name="action">end</string>
             <string name="file">patches/my_patch.patch</string>
         </dict>
+         <dict>
+            <string name="class">Player</string>
+            <string name="function">Damage</string>
+             <!-- Execute before or after the anchor -->
+            <string name="action">after</string>
+            <!-- What it should look for as an anchor inside the function -->
+            <string name="anchor">m_record.hp -= dmg;</string>
+            <!-- This can be a small or wall of code, or a file which contains all the code and will be executed before/after the anchor -->
+            <string name="code"><![CDATA[
+                // Play a sound or trigger visual effect whenever HP is lost
+                print("[ExampleInlineMod] Player took damage, remaining HP: " + m_record.hp);
+            ]]></string>
+        </dict>
     </array>
 </dict>
 ```
