@@ -1,0 +1,83 @@
+name: Create Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Version Tag (e.g. v1.0.0)"
+        required: true
+        type: string
+        default: "v1.0.0"
+      release_name:
+        description: "Release Title (optional, defaults to Tag)"
+        required: false
+        type: string
+        default: "Heroes of Hammerwatch 2 Proxy DLL v1.0.0"
+      release_notes:
+        description: "Release Notes / Changelog"
+        required: false
+        type: string
+        default: "Initial release of HWR2 winmm.dll proxy loader with in-game AngelScript console and hook engine."
+      draft:
+        description: "Save as Draft? (not published publicly until reviewed)"
+        required: false
+        type: boolean
+        default: false
+      prerelease:
+        description: "Mark as Pre-release? (e.g. Beta/Alpha)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Setup MSVC x64 Environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Run Hermetic Unit Tests
+        shell: pwsh
+        run: |
+          .\tests\run_tests.ps1
+
+      - name: Build winmm.dll
+        shell: pwsh
+        run: |
+          .\build.ps1
+
+      - name: Verify Artifact Exists
+        shell: pwsh
+        run: |
+          if (!(Test-Path "winmm.dll")) {
+            Write-Error "Build artifact winmm.dll does not exist!"
+          }
+          $bytes = (Get-Item "winmm.dll").Length
+          Write-Host "[SUCCESS] winmm.dll successfully built ($bytes bytes)"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag_name }}
+          name: ${{ inputs.release_name != '' && inputs.release_name || inputs.tag_name }}
+          body: ${{ inputs.release_notes }}
+          draft: ${{ inputs.draft }}
+          prerelease: ${{ inputs.prerelease }}
+          files: winmm.dll
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

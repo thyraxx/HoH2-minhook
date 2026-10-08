@@ -1,0 +1,25 @@
+# Build Outputs & Intermediate Files
+*.obj
+*.exp
+*.lib
+*.pdb
+*.ilk
+*.bak
+winmm.dll
+test_hook_engine.exe
+
+# Visual Studio & IDE Folders
+.vs/
+*.user
+*.suo
+x64/
+Debug/
+Release/
+
+# Python Cache
+__pycache__/
+*.pyc
+
+# OS Files
+Thumbs.db
+Desktop.ini
