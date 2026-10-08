@@ -69,11 +69,9 @@ build.bat
 Upon a successful build, `winmm.dll` will be generated in the root of the repository.
 
 ### 3. Automated Cloud Builds (GitHub Actions)
-If you host this repository on GitHub:
-- A GitHub Actions workflow is included at [`.github/workflows/build.yml`](file:///e:/SteamLibrary/steamapps/common/Heroes%20of%20Hammerwatch%202%20AGY/patch_scr/.github/workflows/build.yml).
-- Every `git push` or pull request automatically compiles the code, runs the test suite, and uploads `winmm.dll` as a downloadable artifact.
-- You can trigger builds manually from the **Actions** tab $\rightarrow$ **Build and Test Proxy DLL** $\rightarrow$ **Run workflow**.
-- Pushing a version tag (e.g. `v1.0.0`) automatically publishes a GitHub Release with `winmm.dll` attached.
+If you host this repository on GitHub, two pre-configured workflows are available:
+- **`build.yml`** ([`.github/workflows/build.yml`](file:///e:/SteamLibrary/steamapps/common/Heroes%20of%20Hammerwatch%202%20AGY/patch_scr/.github/workflows/build.yml)): Runs on every `push` and pull request (or on-demand). Compiles the code, runs the hermetic test suite, and saves `winmm.dll` as a 14-day downloadable artifact.
+- **`release.yml`** ([`.github/workflows/release.yml`](file:///e:/SteamLibrary/steamapps/common/Heroes%20of%20Hammerwatch%202%20AGY/patch_scr/.github/workflows/release.yml)): **Manual trigger only**. Go to **Actions** $\rightarrow$ **Create Release** $\rightarrow$ **Run workflow**. Prompts for version tag (e.g. `v1.0.0`), title, and release notes, runs tests, compiles the DLL, and publishes an official GitHub Release with `winmm.dll` attached.
 
 ---
 
@@ -158,10 +156,10 @@ Place your mod folder in `mods/<ModName>/`:
             <string name="action">end</string>
             <string name="file">patches/my_patch.patch</string>
         </dict>
-         <dict>
+        <dict>
             <string name="class">Player</string>
             <string name="function">Damage</string>
-             <!-- Execute before or after the anchor -->
+            <!-- Execute before or after the anchor -->
             <string name="action">after</string>
             <!-- What it should look for as an anchor inside the function -->
             <string name="anchor">m_record.hp -= dmg;</string>
