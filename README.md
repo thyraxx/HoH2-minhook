@@ -183,17 +183,16 @@ print("Hello world!");
 ## Project Structure
 
 ```text
-patch_scr/
-├── include/             # Header files (HookEngine.h, angelscript.h)
-├── minhook/             # Bundled MinHook library (buffer, hook, trampoline, hde64)
-├── src/
-│   ├── dllmain.cpp      # DLL lifecycle, engine pattern scanners, console detours
-│   ├── HookEngine.cpp   # In-memory script injector, XML/SValue parser, hook manager
-│   ├── winmm_proxy.cpp  # Dynamic resolution of real System32 winmm.dll
-│   └── winmm_exports.asm# MASM x64 naked export trampolines (180 functions)
-├── build.ps1 / .bat     # Build scripts (VS2022 + MASM + MinHook)
-├── install.ps1 / .bat   # Installs winmm.dll to game root
-├── uninstall.ps1 / .bat # Removes winmm.dll from game root
-├── winmm.def            # PE export definitions for all 180 winmm functions
-└── README.md            # This documentation
+include/             # Header files (HookEngine.h, angelscript.h)
+minhook/             # Bundled MinHook library (buffer, hook, trampoline, hde64)
+src/
+  ├── dllmain.cpp      # DLL lifecycle, engine pattern scanners, console detours
+  ├── HookEngine.cpp   # In-memory script injector, XML/SValue parser, hook manager
+  ├── winmm_proxy.cpp  # Dynamic resolution of real System32 winmm.dll
+  └── winmm_exports.asm# MASM x64 naked export trampolines (180 functions)
+build.ps1 / .bat     # Build scripts (VS2022 + MASM + MinHook)
+install.ps1 / .bat   # Installs winmm.dll to game root
+uninstall.ps1 / .bat # Removes winmm.dll from game root
+winmm.def            # PE export definitions for all 180 winmm functions
+README.md            # This documentation
 ```
