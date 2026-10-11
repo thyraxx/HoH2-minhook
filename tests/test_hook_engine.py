@@ -128,6 +128,108 @@ MOCK_PLAYER_RECORD_SCRIPT = """class PlayerRecord
 }
 """
 
+MOCK_MODLIST_WINDOW_SCRIPT = """class ModlistWindow : AWindowObject
+{
+    Widget@ m_list;
+    bool m_closing = false;
+
+    void RefreshList()
+    {
+        for (uint i = 0; i < mods.length(); i++)
+        {
+            auto mod = mods[i].m_mod;
+            auto wNewMod = cast<AInteractableWidget>(m_modTemplate.Clone());
+            cast<TextWidget>(wNewMod.GetWidgetById("text")).SetText(mod.Name);
+        }
+    }
+
+    void OnFunc(Widget@ sender, const string &in name) override
+    {
+        ResourceMod@ senderMod = null;
+        if (name == "hover")
+        {
+            string descText = senderMod.Description;
+            cast<TextWidget>(m_widget.GetWidgetById("mod-desc")).SetText(descText);
+        }
+        else if (name == "close")
+        {
+            m_closing = true;
+        }
+    }
+}
+"""
+
+def patch_modlist_window(source):
+    if "class ModlistWindow" not in source:
+        return False, source
+    
+    modified = source
+    target1 = 'cast<TextWidget>(wNewMod.GetWidgetById("text")).SetText(mod.Name);'
+    repl1 = (
+        'string displayName = mod.Name;\n'
+        '\t\t\tif (PersistentSaves::IsModEnabled(mod) && ModConflictDetector::HasConflict(mod))\n'
+        '\t\t\t\tdisplayName += " \\cff2222[! Conflict]\\d";\n'
+        '\t\t\tcast<TextWidget>(wNewMod.GetWidgetById("text")).SetText(displayName);'
+    )
+    if target1 in modified:
+        modified = modified.replace(target1, repl1, 1)
+
+    target2 = 'void OnFunc(Widget@ sender, const string &in name) override'
+    idx2 = modified.find(target2)
+    if idx2 != -1:
+        brace2 = modified.find('{', idx2)
+        if brace2 != -1:
+            guard = (
+                '\n\t\tif (name == "mod-conflict-warning yes")\n'
+                '\t\t{\n\t\t\tm_closing = true;\n\t\t\treturn;\n\t\t}\n'
+                '\t\telse if (name == "mod-conflict-warning" || name == "mod-conflict-warning no")\n'
+                '\t\t{\n\t\t\treturn;\n\t\t}\n'
+                '\t\tif (sender is null)\n\t\t\treturn;\n'
+            )
+            modified = modified[:brace2+1] + guard + modified[brace2+1:]
+
+    target3 = 'cast<TextWidget>(m_widget.GetWidgetById("mod-desc")).SetText(descText);'
+    repl3 = (
+        'string conflictWarn = ModConflictDetector::GetConflictWarning(senderMod);\n'
+        '\t\t\tif (!conflictWarn.isEmpty())\n'
+        '\t\t\t\tdescText += "\\n\\n" + conflictWarn;\n'
+        '\t\t\tcast<TextWidget>(m_widget.GetWidgetById("mod-desc")).SetText(descText);'
+    )
+    if target3 in modified:
+        modified = modified.replace(target3, repl3, 1)
+
+    idx4 = modified.find('name == "close"')
+    if idx4 != -1:
+        brace4 = modified.find('{', idx4)
+        if brace4 != -1:
+            close4 = modified.find('}', brace4)
+            if close4 != -1:
+                close_repl = (
+                    '{\n'
+                    '\t\t\tstring conflictsSummary = ModConflictDetector::GetSummaryOfActiveConflicts();\n'
+                    '\t\t\tif (!conflictsSummary.isEmpty() && g_gameMode !is null)\n'
+                    '\t\t\t{\n'
+                    '\t\t\t\tg_gameMode.ShowDialog(\n'
+                    '\t\t\t\t\t"mod-conflict-warning",\n'
+                    '\t\t\t\t\t"WARNING: Mod Conflicts Detected!\\n\\nMultiple enabled mods overwrite the same AngelScript (.as) files:\\n\\n" + conflictsSummary + "\\nAre you sure you want to continue?",\n'
+                    '\t\t\t\t\t"Continue",\n'
+                    '\t\t\t\t\t"Go Back",\n'
+                    '\t\t\t\t\tthis\n'
+                    '\t\t\t\t);\n'
+                    '\t\t\t}\n'
+                    '\t\t\telse\n'
+                    '\t\t\t{\n'
+                    '\t\t\t\tm_closing = true;\n'
+                    '\t\t\t}\n'
+                    '\t\t}'
+                )
+                modified = modified[:brace4] + close_repl + modified[close4+1:]
+
+    namespace_code = "\n// [HookEngine] Mod Conflict Detector\nnamespace ModConflictDetector\n{\n}\n\n"
+    modified = namespace_code + modified
+    return True, modified
+
+
 def run_tests():
     print("=" * 60)
     print(" Heroes of Hammerwatch 2 - Python Resilient Unit Tests")
@@ -167,7 +269,19 @@ def run_tests():
     assert "string debugMsg =" in body2
     print("PASSED")
 
-    # 4. Test Dynamic Unpacked Assets (Optional Validation)
+    # 4. Test Mod Conflict Detector (ModlistWindow In-Memory Patch)
+    print("[TEST] Mod Conflict Detector (ModlistWindow In-Memory Patch)... ", end="")
+    success, patched_mock = patch_modlist_window(MOCK_MODLIST_WINDOW_SCRIPT)
+    assert success is True
+    assert "namespace ModConflictDetector" in patched_mock
+    assert "[! Conflict]" in patched_mock
+    assert "mod-conflict-warning yes" in patched_mock
+    assert "ModConflictDetector::GetConflictWarning" in patched_mock
+    assert "ModConflictDetector::GetSummaryOfActiveConflicts" in patched_mock
+    assert "g_gameMode.ShowDialog" in patched_mock
+    print("PASSED")
+
+    # 5. Test Dynamic Unpacked Assets (Optional Validation)
     print("[TEST] Dynamic Discovery of Unpacked Game Assets... ", end="")
     assets_dir = find_unpacked_assets_dir()
     if not assets_dir:
@@ -189,6 +303,17 @@ def run_tests():
             ob, cb = find_method_braces(content, "PlayerRecord", "RefreshModifiers")
             assert ob is not None and cb is not None, "Failed to parse RefreshModifiers in live PlayerRecord.as"
             print(f"       -> Validated live PlayerRecord.as ({len(content)} bytes) OK")
+
+        modlist_path = os.path.join(assets_dir, "scripts", "GUI", "ModlistWindow.as")
+        if os.path.exists(modlist_path):
+            with open(modlist_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            succ, patched_live = patch_modlist_window(content)
+            assert succ is True, "Failed to patch live ModlistWindow.as"
+            assert "[! Conflict]" in patched_live
+            assert "mod-conflict-warning" in patched_live
+            print(f"       -> Validated live ModlistWindow.as ({len(content)} bytes) OK")
+
         print("       -> Live game asset validation PASSED")
 
     print("\n" + "=" * 60)
@@ -198,3 +323,4 @@ def run_tests():
 
 if __name__ == "__main__":
     run_tests()
+

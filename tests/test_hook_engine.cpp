@@ -114,6 +114,38 @@ static const char* kMockGameModeScript =
 "    }\n"
 "}\n";
 
+static const char* kMockModlistWindowScript =
+"class ModlistWindow : AWindowObject\n"
+"{\n"
+"    Widget@ m_list;\n"
+"    bool m_closing = false;\n"
+"\n"
+"    void RefreshList()\n"
+"    {\n"
+"        for (uint i = 0; i < mods.length(); i++)\n"
+"        {\n"
+"            auto mod = mods[i].m_mod;\n"
+"            auto wNewMod = cast<AInteractableWidget>(m_modTemplate.Clone());\n"
+"            cast<TextWidget>(wNewMod.GetWidgetById(\"text\")).SetText(mod.Name);\n"
+"        }\n"
+"    }\n"
+"\n"
+"    void OnFunc(Widget@ sender, const string &in name) override\n"
+"    {\n"
+"        ResourceMod@ senderMod = null;\n"
+"        if (name == \"hover\")\n"
+"        {\n"
+"            string descText = senderMod.Description;\n"
+"            cast<TextWidget>(m_widget.GetWidgetById(\"mod-desc\")).SetText(descText);\n"
+"        }\n"
+"        else if (name == \"close\")\n"
+"        {\n"
+"            m_closing = true;\n"
+"        }\n"
+"    }\n"
+"}\n";
+
+
 // -----------------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------------
@@ -242,6 +274,192 @@ void TestHermeticHookAndPatchProcessing() {
     std::cout << "PASSED\n";
 }
 
+void TestModConflictDetectorPatching() {
+    std::cout << "[TEST] Mod Conflict Detector (ModlistWindow In-Memory Patch)... ";
+    HookEngine::ClearDiscoveredModScripts();
+    HookEngine::RegisterModScript("ModA", "Mod Alpha", "scripts/GUI/PlayerMenu/Character.as");
+    HookEngine::RegisterModScript("ModB", "Mod Beta", "scripts/GUI/PlayerMenu/Character.as");
+    HookEngine::RegisterModScript("ModC", "Mod Gamma", "scripts/Unique.as");
+
+    assert(HookEngine::GetDiscoveredModScriptCount() == 3);
+
+    std::string source = kMockModlistWindowScript;
+    bool res = HookEngine::PatchModlistWindow(source);
+    assert(res == true);
+
+    // Verify generated namespace
+    assert(source.find("namespace ModConflictDetector") != std::string::npos);
+    assert(source.find("ModScriptEntry(\"ModA\", \"Mod Alpha\", \"scripts/gui/playermenu/character.as\")") != std::string::npos);
+    assert(source.find("ModScriptEntry(\"ModB\", \"Mod Beta\", \"scripts/gui/playermenu/character.as\")") != std::string::npos);
+    assert(source.find("ModScriptEntry(\"ModC\", \"Mod Gamma\", \"scripts/unique.as\")") != std::string::npos);
+
+    // Verify Anchor 1 (badge)
+    assert(source.find("ModConflictDetector::HasConflict(mod)") != std::string::npos);
+    assert(source.find("[! Conflict]") != std::string::npos);
+
+    // Verify Anchor 2 (OnFunc null-guard & dialog callbacks)
+    assert(source.find("if (name == \"mod-conflict-warning yes\")") != std::string::npos);
+    assert(source.find("if (sender is null)") != std::string::npos);
+
+    // Verify Anchor 3 (Hover warning)
+    assert(source.find("ModConflictDetector::GetConflictWarning(senderMod)") != std::string::npos);
+
+    // Verify Anchor 4 (Close confirmation dialog)
+    assert(source.find("ModConflictDetector::GetSummaryOfActiveConflicts()") != std::string::npos);
+    assert(source.find("g_gameMode.ShowDialog") != std::string::npos);
+
+    // Test ProcessScriptSection route with ModlistWindow.as
+    std::string secOut;
+    bool secInjected = false;
+    void* mockMod = (void*)0x8888000;
+    bool secRes = HookEngine::ProcessScriptSection(
+        mockMod,
+        "scripts/GUI/ModlistWindow.as",
+        kMockModlistWindowScript,
+        strlen(kMockModlistWindowScript),
+        secOut,
+        secInjected
+    );
+    assert(secRes == true && secInjected == true);
+    assert(secOut.find("namespace ModConflictDetector") != std::string::npos);
+    HookEngine::OnModuleBuildComplete(mockMod);
+
+    std::cout << "PASSED\n";
+}
+
+void TestSaveProfilesMenuPatching() {
+    std::cout << "[TEST] SaveProfilesMenu Safe Profile Switch & RefreshList Guards Patching... ";
+
+    const char* kMockSaveProfilesMenuScript = R"(
+namespace Menu
+{
+	class SaveProfilesMenu : AWindowObject
+	{
+		TextInputWidget@ m_wFilter;
+		Widget@ m_listTemplate;
+		FilteredListWidget@ m_list;
+
+		void OnFunc(Widget@ sender, const string &in name) override
+		{
+			auto parse = name.split(" ");
+			if (parse[0] == "select")
+			{
+				bool isHost = !Lobby::IsInLobby() || Lobby::IsPlayerHost(Lobby::GetLocalPeer());
+				bool inTown = GlobalCache::Get("in_town") == "1";
+
+				Lobby::CloseLobby();
+
+				if (GetMenuState() != MenuState::MainMenu)
+				{
+					if (!inTown || !isHost)
+					{
+						GlobalCache::Set("switch_to_save_slot", "" + slotKey + " " + (slotCloud ? "true" : "false"));
+						StopScenario();
+						return;
+					}
+				}
+
+				SwitchToSaveSlot(slotKey, slotCloud);
+				RefreshList();
+			}
+		}
+
+		void RefreshList()
+		{
+			auto currSlotKey = uint(GetVarInt("g_save_slot"));
+			auto currSlotCloud = GetVarBool("g_save_slot_cloud");
+
+			m_list.ClearChildren();
+			auto saveSlots = PersistentSaves::GetAllDataSlots();
+
+			for (uint i = 0; i < saveSlots.length(); i++)
+			{
+				auto wItem = m_listTemplate.Clone();
+
+				bool selected = currSlotKey == saveSlots[i].key && saveSlots[i].cloud == currSlotCloud;
+
+				auto nameW = cast<TextWidget>(wItem.GetWidgetById("name"));
+				nameW.SetText(!saveSlots[i].name.isEmpty() ? saveSlots[i].name : GetProfileName(saveSlots[i].key, saveSlots[i].cloud));
+
+				if (saveSlots[i].modded)
+				{
+					wItem.GetWidgetById("cloud").m_offset.x += 12;
+					nameW.m_offset.x += 12;
+				}
+
+				if (saveSlots[i].cloud)
+					nameW.m_offset.x += 15;
+
+				wItem.GetWidgetById("modded").m_visible = saveSlots[i].modded;
+				wItem.GetWidgetById("cloud").m_visible = saveSlots[i].cloud;
+				wItem.GetWidgetById("selected").m_visible = selected;
+			}
+		}
+	}
+}
+)";
+
+    std::string source = kMockSaveProfilesMenuScript;
+    bool res = HookEngine::PatchSaveProfilesMenu(source);
+    assert(res == true);
+
+    // Verify Anchor 1 (clean profile switch and lobby teardown)
+    assert(source.find("Lobby::LeaveLobby();") != std::string::npos);
+    assert(source.find("m_closing = true;") != std::string::npos);
+    assert(source.find("GlobalCache::Set(\"switch_to_save_slot\"") != std::string::npos);
+    assert(source.find("StopScenario();") != std::string::npos);
+
+    // Verify Anchor 2 (wItem null guard)
+    assert(source.find("if (wItem is null)") != std::string::npos);
+
+    // Verify Anchor 3 (defensive null checks in RefreshList)
+    assert(source.find("if (cloudW !is null) cloudW.m_offset.x += 12;") != std::string::npos);
+    assert(source.find("if (nameW !is null)") != std::string::npos);
+    assert(source.find("if (moddedW !is null)") != std::string::npos);
+
+    std::cout << "PASSED\n";
+}
+
+void TestMainMenuGameModePatching() {
+    std::cout << "[TEST] MainMenuGameMode SetMenuState null guard patching... ";
+    std::string mockMM =
+        "class MainMenuGameMode : BaseGameMode {\n"
+        "    void SetMenuState(MenuState state) {\n"
+        "        m_ingameChat.StopInput();\n"
+        "        m_state = state;\n"
+        "    }\n"
+        "}\n";
+
+    bool res = HookEngine::PatchMainMenuGameMode(mockMM);
+    assert(res == true);
+    assert(mockMM.find("if (m_ingameChat !is null)") != std::string::npos);
+    assert(mockMM.find("m_ingameChat.StopInput();") != std::string::npos);
+    std::cout << "PASSED\n";
+}
+
+void TestWindowMainMenuPatching() {
+    std::cout << "[TEST] WindowMainMenu reactive lobby sync patching... ";
+    std::string mockWMM =
+        "class WindowMainMenu : AWindowObject {\n"
+        "    int m_buttonNum;\n"
+        "    WindowMainMenu() {\n"
+        "        RefreshButtons();\n"
+        "    }\n"
+        "    void RefreshButtons() {\n"
+        "        m_buttonList.ClearChildren();\n"
+        "    }\n"
+        "    bool Back() override { return true; }\n"
+        "}\n";
+
+    bool res = HookEngine::PatchWindowMainMenu(mockWMM);
+    assert(res == true);
+    assert(mockWMM.find("bool m_wasInLobby;") != std::string::npos);
+    assert(mockWMM.find("m_wasInLobby = Lobby::IsInLobby();") != std::string::npos);
+    assert(mockWMM.find("m_menuState = GetMenuState();") != std::string::npos);
+    assert(mockWMM.find("bool Update(int ms, GameInput& gameInput, MenuInput& menuInput) override") != std::string::npos);
+    std::cout << "PASSED\n";
+}
+
 void TestLiveGameAssetsIfAvailable() {
     std::cout << "[TEST] Dynamic Discovery of Unpacked Game Assets... ";
     std::string assetsDir = FindUnpackedAssetsDir();
@@ -280,6 +498,73 @@ void TestLiveGameAssetsIfAvailable() {
         std::cout << "OK\n";
     }
 
+    // Verify ModlistWindow.as
+    std::string modlistPath = assetsDir + "\\scripts\\GUI\\ModlistWindow.as";
+    std::string modlistContent = ReadFileToString(modlistPath);
+    if (!modlistContent.empty()) {
+        std::cout << "       -> Validating against real ModlistWindow.as (" << modlistContent.length() << " bytes)... ";
+        std::string out;
+        bool inj = false;
+        void* mockMod = (void*)0x9999000;
+        bool res = HookEngine::ProcessScriptSection(mockMod, "scripts/GUI/ModlistWindow.as", modlistContent.c_str(), modlistContent.length(), out, inj);
+        assert(res == true && inj == true);
+        assert(out.find("namespace ModConflictDetector") != std::string::npos);
+        assert(out.find("[! Conflict]") != std::string::npos);
+        assert(out.find("mod-conflict-warning") != std::string::npos);
+        HookEngine::OnModuleBuildComplete(mockMod);
+        std::cout << "OK\n";
+    }
+
+    // Verify SaveProfilesMenu.as
+    std::string saveProfilesPath = assetsDir + "\\scripts\\GUI\\Menus\\SaveProfilesMenu.as";
+    std::string saveProfilesContent = ReadFileToString(saveProfilesPath);
+    if (!saveProfilesContent.empty()) {
+        std::cout << "       -> Validating against real SaveProfilesMenu.as (" << saveProfilesContent.length() << " bytes)... ";
+        std::string out;
+        bool inj = false;
+        void* mockMod = (void*)0x9999001;
+        bool res = HookEngine::ProcessScriptSection(mockMod, "scripts/GUI/Menus/SaveProfilesMenu.as", saveProfilesContent.c_str(), saveProfilesContent.length(), out, inj);
+        assert(res == true && inj == true);
+        assert(out.find("Lobby::LeaveLobby();") != std::string::npos);
+        assert(out.find("m_closing = true;") != std::string::npos);
+        assert(out.find("if (wItem is null)") != std::string::npos);
+        assert(out.find("if (cloudW !is null)") != std::string::npos);
+        HookEngine::OnModuleBuildComplete(mockMod);
+        std::cout << "OK\n";
+    }
+
+    // Verify MainMenuGameMode.as
+    std::string mmgmPath = assetsDir + "\\scripts\\GameModes\\MainMenuGameMode.as";
+    std::string mmgmContent = ReadFileToString(mmgmPath);
+    if (!mmgmContent.empty()) {
+        std::cout << "       -> Validating against real MainMenuGameMode.as (" << mmgmContent.length() << " bytes)... ";
+        std::string out;
+        bool inj = false;
+        void* mockMod = (void*)0x9999002;
+        bool res = HookEngine::ProcessScriptSection(mockMod, "scripts/GameModes/MainMenuGameMode.as", mmgmContent.c_str(), mmgmContent.length(), out, inj);
+        assert(res == true && inj == true);
+        assert(out.find("if (m_ingameChat !is null)") != std::string::npos);
+        HookEngine::OnModuleBuildComplete(mockMod);
+        std::cout << "OK\n";
+    }
+
+    // Verify WindowMainMenu.as
+    std::string wmmPath = assetsDir + "\\scripts\\GUI\\WindowMainMenu.as";
+    std::string wmmContent = ReadFileToString(wmmPath);
+    if (!wmmContent.empty()) {
+        std::cout << "       -> Validating against real WindowMainMenu.as (" << wmmContent.length() << " bytes)... ";
+        std::string out;
+        bool inj = false;
+        void* mockMod = (void*)0x9999003;
+        bool res = HookEngine::ProcessScriptSection(mockMod, "scripts/GUI/WindowMainMenu.as", wmmContent.c_str(), wmmContent.length(), out, inj);
+        assert(res == true && inj == true);
+        assert(out.find("bool m_wasInLobby;") != std::string::npos);
+        assert(out.find("m_menuState = GetMenuState();") != std::string::npos);
+        assert(out.find("bool Update(int ms, GameInput& gameInput, MenuInput& menuInput) override") != std::string::npos);
+        HookEngine::OnModuleBuildComplete(mockMod);
+        std::cout << "OK\n";
+    }
+
     std::cout << "       -> Live game asset validation PASSED\n";
 }
 
@@ -291,6 +576,10 @@ int main() {
     TestSnippetNeutralization();
     TestMetadataPreprocessing();
     TestHermeticHookAndPatchProcessing();
+    TestModConflictDetectorPatching();
+    TestSaveProfilesMenuPatching();
+    TestMainMenuGameModePatching();
+    TestWindowMainMenuPatching();
     TestLiveGameAssetsIfAvailable();
 
     std::cout << "\n========================================================\n";
@@ -299,3 +588,4 @@ int main() {
     std::cout << "========================================================\n";
     return 0;
 }
+
