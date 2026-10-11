@@ -62,5 +62,8 @@ public:
     static void RegisterModScript(const std::string& modId, const std::string& modName, const std::string& scriptPath);
     static void ClearDiscoveredModScripts();
     static bool PatchModlistWindow(std::string& source);
+    static bool PatchSaveProfilesMenu(std::string& source);
+    static bool PatchMainMenuGameMode(std::string& source);
+    static bool PatchWindowMainMenu(std::string& source);
 };
 

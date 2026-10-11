@@ -80,12 +80,32 @@ static bool IsCheatsEnabled() {
 
 #define RVA_RESOURCE_TASK_LAMBDA    0x7BAD0
 #define RVA_SECONDARY_TASK_LAMBDA   0x7BB40
+#define RVA_TEARDOWN_CALLBACKS      0x118110
+#define RVA_SECONDARY_TEARDOWN      0x1184B0
+#define RVA_WORLD_TEARDOWN          0x117C10
+#define RVA_CONTEXT_TEARDOWN        0x117FB0
 
 typedef void (__fastcall *tResourceTaskLambda)(void* thisPtr, void* pContext);
 static tResourceTaskLambda g_OriginalResourceTaskLambda = nullptr;
 
 typedef void (__fastcall *tSecondaryTaskLambda)(void* thisPtr, void* pContext);
 static tSecondaryTaskLambda g_OriginalSecondaryTaskLambda = nullptr;
+
+typedef void (__fastcall *tTeardownCallbacks)();
+static tTeardownCallbacks g_OriginalTeardownCallbacks = nullptr;
+
+typedef void (__fastcall *tSecondaryTeardown)();
+static tSecondaryTeardown g_OriginalSecondaryTeardown = nullptr;
+
+typedef void (__fastcall *tWorldTeardown)(void* pContext);
+static tWorldTeardown g_OriginalWorldTeardown = nullptr;
+
+typedef void (__fastcall *tContextTeardown)(void* pContext);
+static tContextTeardown g_OriginalContextTeardown = nullptr;
+
+#define RVA_CONTEXT_PREPARE         0x45D180
+typedef int (__fastcall *tContextPrepare)(void* thisPtr, void* pFunc);
+static tContextPrepare g_OriginalContextPrepare = nullptr;
 
 typedef void (__fastcall *tProcessMetadata)(void* pScriptSys, void* pBuilder);
 static tProcessMetadata g_OriginalProcessMetadata = nullptr;
@@ -208,6 +228,90 @@ static void __fastcall Hooked_SecondaryTaskLambda(void* thisPtr, void* pContext)
         if (g_ConsolePrint) {
             g_ConsolePrint(CONSOLE_CHANNEL_WARNING, "[Crash Guard] Successfully prevented game crash! (Access Violation 0x%08X intercepted at 0x7BB40)\n", exc);
         }
+    }
+}
+
+// Safety guard hook for teardown callbacks iterator (RVA 0x118110)
+// Prevents access violation 0xC0000005 at 0x11825F when discarding world scripts/callbacks with dangling delegates during profile switch
+static void __fastcall Hooked_TeardownCallbacks() {
+    __try {
+        if (g_OriginalTeardownCallbacks) {
+            g_OriginalTeardownCallbacks();
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        DWORD exc = GetExceptionCode();
+        Log("[Crash Guard] Intercepted access violation (0x%08X) at 0x11825F during world teardown! Crash prevented.", exc);
+        if (g_ConsolePrint) {
+            g_ConsolePrint(CONSOLE_CHANNEL_WARNING, "[Crash Guard] Successfully prevented game crash during world teardown! (Access Violation 0x%08X intercepted at 0x11825F)\n", exc);
+        }
+    }
+}
+
+// Safety guard hook for secondary teardown iterator (RVA 0x1184B0)
+static void __fastcall Hooked_SecondaryTeardown() {
+    __try {
+        if (g_OriginalSecondaryTeardown) {
+            g_OriginalSecondaryTeardown();
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        DWORD exc = GetExceptionCode();
+        Log("[Crash Guard] Intercepted access violation (0x%08X) at 0x11853F during secondary teardown! Crash prevented.", exc);
+        if (g_ConsolePrint) {
+            g_ConsolePrint(CONSOLE_CHANNEL_WARNING, "[Crash Guard] Prevented crash at 0x11853F (dangling teardown callback 0x%08X)\n", exc);
+        }
+    }
+}
+
+// Safety guard hook for world teardown iterator (RVA 0x117C10)
+static void __fastcall Hooked_WorldTeardown(void* pContext) {
+    __try {
+        if (g_OriginalWorldTeardown) {
+            g_OriginalWorldTeardown(pContext);
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        DWORD exc = GetExceptionCode();
+        Log("[Crash Guard] Intercepted access violation (0x%08X) at 0x117C10 during world teardown! Crash prevented.", exc);
+        if (g_ConsolePrint) {
+            g_ConsolePrint(CONSOLE_CHANNEL_WARNING, "[Crash Guard] Prevented crash at 0x117C10 (dangling world teardown callback 0x%08X)\n", exc);
+        }
+    }
+}
+
+// Safety guard hook for context teardown iterator (RVA 0x117FB0)
+static void __fastcall Hooked_ContextTeardown(void* pContext) {
+    __try {
+        if (g_OriginalContextTeardown) {
+            g_OriginalContextTeardown(pContext);
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        DWORD exc = GetExceptionCode();
+        Log("[Crash Guard] Intercepted access violation (0x%08X) at 0x118059 during context teardown! Crash prevented.", exc);
+        if (g_ConsolePrint) {
+            g_ConsolePrint(CONSOLE_CHANNEL_WARNING, "[Crash Guard] Prevented crash at 0x118059 (dangling context teardown callback 0x%08X)\n", exc);
+        }
+    }
+}
+
+// Safety guard hook for asCContext::Prepare (RVA 0x45D180)
+// Prevents access violation 0xC0000005 at 0x45D2D7 when preparing stale function pointers from discarded engines
+static int __fastcall Hooked_ContextPrepare(void* thisPtr, void* pFunc) {
+    __try {
+        if (!thisPtr || !pFunc || (uintptr_t)pFunc < 0x10000) {
+            return -6; // asINVALID_ARG
+        }
+        return g_OriginalContextPrepare(thisPtr, pFunc);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        DWORD exc = GetExceptionCode();
+        Log("[Crash Guard] Intercepted access violation (0x%08X) in asCContext::Prepare(%p)! Crash prevented.", exc, pFunc);
+        if (g_ConsolePrint) {
+            g_ConsolePrint(CONSOLE_CHANNEL_WARNING, "[Crash Guard] Prevented crash in asCContext::Prepare (stale function pointer %p, 0x%08X)\n", pFunc, exc);
+        }
+        return -6; // asINVALID_ARG
     }
 }
 
@@ -912,6 +1016,82 @@ static DWORD WINAPI InitThread(LPVOID lpParam) {
         Log("[Patch] Hooked SecondaryTaskLambda at %p (Profile Switch Secondary Guard Active)", pSecondaryTarget);
     } else {
         Log("[Patch Error] Failed to hook SecondaryTaskLambda");
+    }
+
+    // 5b. Resolve and Hook TeardownCallbacks (0x118110): Crash guard for world/scenario unload
+    static const unsigned char kSigTeardownCallbacks[] = {
+        0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x48, 0x89, 0x7C, 0x24, 0x18, 0x55,
+        0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0x6C, 0x24, 0xE0, 0x48, 0x81, 0xEC,
+        0x20, 0x01, 0x00, 0x00, 0x48, 0x8B, 0x05, 0x00, 0x00, 0x00, 0x00, 0x48, 0x33, 0xC4, 0x48, 0x89,
+        0x45, 0x10, 0x0F, 0x57, 0xC0, 0xF3, 0x0F, 0x7F
+    };
+    static const char kMaskTeardownCallbacks[] = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxxxxxxxxxxx";
+
+    void* pTeardownTarget = PatternScanMask((HMODULE)g_BaseAddress, kSigTeardownCallbacks, kMaskTeardownCallbacks);
+    if (pTeardownTarget) {
+        Log("[Patch] Found TeardownCallbacks via pattern scan: %p (RVA +0x%llX)", pTeardownTarget, (unsigned long long)((uintptr_t)pTeardownTarget - g_BaseAddress));
+    } else {
+        pTeardownTarget = (void*)(g_BaseAddress + RVA_TEARDOWN_CALLBACKS);
+        Log("[Patch] Fallback to RVA for TeardownCallbacks: %p", pTeardownTarget);
+    }
+
+    if (MH_CreateHook(pTeardownTarget, (void*)&Hooked_TeardownCallbacks, (void**)&g_OriginalTeardownCallbacks) == MH_OK) {
+        MH_EnableHook(pTeardownTarget);
+        Log("[Patch] Hooked TeardownCallbacks at %p (Scenario Teardown Safety Guard Active)", pTeardownTarget);
+    } else {
+        Log("[Patch Error] Failed to hook TeardownCallbacks");
+    }
+
+    // 5c. Resolve and Hook SecondaryTeardown (0x1184B0)
+    static const unsigned char kSigSecondaryTeardown[] = {
+        0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x81, 0xEC, 0xC0, 0x01, 0x00, 0x00, 0x48, 0x8B, 0x05
+    };
+    void* pSecTeardownTarget = PatternScan((HMODULE)g_BaseAddress, kSigSecondaryTeardown, sizeof(kSigSecondaryTeardown));
+    if (pSecTeardownTarget) {
+        Log("[Patch] Found SecondaryTeardown via pattern scan: %p (RVA +0x%llX)", pSecTeardownTarget, (unsigned long long)((uintptr_t)pSecTeardownTarget - g_BaseAddress));
+    } else {
+        pSecTeardownTarget = (void*)(g_BaseAddress + RVA_SECONDARY_TEARDOWN);
+        Log("[Patch] Fallback to RVA for SecondaryTeardown: %p", pSecTeardownTarget);
+    }
+
+    if (MH_CreateHook(pSecTeardownTarget, (void*)&Hooked_SecondaryTeardown, (void**)&g_OriginalSecondaryTeardown) == MH_OK) {
+        MH_EnableHook(pSecTeardownTarget);
+        Log("[Patch] Hooked SecondaryTeardown at %p (Secondary Teardown Safety Guard Active)", pSecTeardownTarget);
+    } else {
+        Log("[Patch Error] Failed to hook SecondaryTeardown");
+    }
+
+    // 5d. Hook WorldTeardown (0x117C10) and ContextTeardown (0x117FB0) with fallback RVAs
+    void* pWorldTeardownTarget = (void*)(g_BaseAddress + RVA_WORLD_TEARDOWN);
+    if (MH_CreateHook(pWorldTeardownTarget, (void*)&Hooked_WorldTeardown, (void**)&g_OriginalWorldTeardown) == MH_OK) {
+        MH_EnableHook(pWorldTeardownTarget);
+        Log("[Patch] Hooked WorldTeardown at %p (World Teardown Safety Guard Active)", pWorldTeardownTarget);
+    }
+
+    void* pContextTeardownTarget = (void*)(g_BaseAddress + RVA_CONTEXT_TEARDOWN);
+    if (MH_CreateHook(pContextTeardownTarget, (void*)&Hooked_ContextTeardown, (void**)&g_OriginalContextTeardown) == MH_OK) {
+        MH_EnableHook(pContextTeardownTarget);
+        Log("[Patch] Hooked ContextTeardown at %p (Context Teardown Safety Guard Active)", pContextTeardownTarget);
+    }
+
+    // 5e. Resolve and Hook asCContext::Prepare (0x45D180): Crash guard for stale script function pointers
+    static const unsigned char kSigContextPrepare[] = {
+        0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x48, 0x89, 0x7C, 0x24, 0x18, 0x4C,
+        0x89, 0x74, 0x24, 0x20, 0x55, 0x48, 0x8B, 0xEC, 0x48, 0x83, 0xEC, 0x50, 0x48, 0x8B, 0xFA, 0x48
+    };
+    void* pPrepTarget = PatternScan((HMODULE)g_BaseAddress, kSigContextPrepare, sizeof(kSigContextPrepare));
+    if (pPrepTarget) {
+        Log("[Patch] Found asCContext::Prepare via pattern scan: %p (RVA +0x%llX)", pPrepTarget, (unsigned long long)((uintptr_t)pPrepTarget - g_BaseAddress));
+    } else {
+        pPrepTarget = (void*)(g_BaseAddress + RVA_CONTEXT_PREPARE);
+        Log("[Patch] Fallback to RVA for asCContext::Prepare: %p", pPrepTarget);
+    }
+
+    if (MH_CreateHook(pPrepTarget, (void*)&Hooked_ContextPrepare, (void**)&g_OriginalContextPrepare) == MH_OK) {
+        MH_EnableHook(pPrepTarget);
+        Log("[Patch] Hooked asCContext::Prepare at %p (Context Prepare Safety Guard Active)", pPrepTarget);
+    } else {
+        Log("[Patch Error] Failed to hook asCContext::Prepare");
     }
 
     // 6. Initialize Universal Hook Engine & Hook asCModule::AddScriptSection (0x48A410)

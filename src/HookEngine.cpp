@@ -819,6 +819,55 @@ bool HookEngine::ProcessScriptSection(
         }
     }
 
+    // Safe Profile Switch & RefreshList Guards: In-memory patch of SaveProfilesMenu.as
+    if (secStr.find("saveprofilesmenu.as") != std::string::npos) {
+        if (PatchSaveProfilesMenu(source)) {
+            modified = true;
+            outInjectedHooksOrPatches = true;
+            Log("[HookEngine] Injected Safe Profile Switch & RefreshList Guards into %s", sectionName ? sectionName : "<unknown>");
+            if (g_ConsolePrint) {
+                g_ConsolePrint(CONSOLE_CHANNEL_INFO, "[HookEngine] Injected Safe Profile Switch into SaveProfilesMenu\n");
+            }
+        }
+    }
+
+    // MainMenuGameMode SetMenuState null guard: In-memory patch of MainMenuGameMode.as
+    if (secStr.find("mainmenugamemode.as") != std::string::npos) {
+        if (PatchMainMenuGameMode(source)) {
+            modified = true;
+            outInjectedHooksOrPatches = true;
+            Log("[HookEngine] Injected SetMenuState null guard into %s", sectionName ? sectionName : "<unknown>");
+            if (g_ConsolePrint) {
+                g_ConsolePrint(CONSOLE_CHANNEL_INFO, "[HookEngine] Injected SetMenuState null guard into MainMenuGameMode\n");
+            }
+        }
+    }
+
+    // WindowMainMenu reactive lobby sync: In-memory patch of WindowMainMenu.as
+    if (secStr.find("windowmainmenu.as") != std::string::npos) {
+        if (PatchWindowMainMenu(source)) {
+            modified = true;
+            outInjectedHooksOrPatches = true;
+            Log("[HookEngine] Injected reactive lobby sync into %s", sectionName ? sectionName : "<unknown>");
+            if (g_ConsolePrint) {
+                g_ConsolePrint(CONSOLE_CHANNEL_INFO, "[HookEngine] Injected reactive lobby sync into WindowMainMenu\n");
+            }
+        }
+    }
+
+    // Fix dangling delegate reference to TestErrorSpam in HWR2GameMode.as
+    if (secStr.find("hwr2gamemode.as") != std::string::npos) {
+        const std::string kSpamTarget = "RepeatQueuedDebugFunc(GetVarInt(\"dbt_test_error_spam\"), TestErrorSpam);";
+        size_t posSpam = source.find(kSpamTarget);
+        if (posSpam != std::string::npos) {
+            source.replace(posSpam, kSpamTarget.length(),
+                "int _dbtSpam = GetVarInt(\"dbt_test_error_spam\"); if (_dbtSpam > 0) RepeatQueuedDebugFunc(_dbtSpam, TestErrorSpam);");
+            modified = true;
+            outInjectedHooksOrPatches = true;
+            Log("[HookEngine] Guarded RepeatQueuedDebugFunc in %s", sectionName ? sectionName : "<unknown>");
+        }
+    }
+
     // 1. Inject Dynamic Hooks (Hooks::Call)
 
     for (const auto& def : g_HookDefinitions) {
@@ -1313,3 +1362,152 @@ bool HookEngine::PatchModlistWindow(std::string& source) {
 
     return false;
 }
+
+bool HookEngine::PatchSaveProfilesMenu(std::string& source) {
+    if (source.find("class SaveProfilesMenu") == std::string::npos) {
+        return false;
+    }
+
+    bool anyPatched = false;
+
+    // Anchor 1: In-game profile switch fix:
+    // If not in Town or not Host, gracefully set switch_to_save_slot, StopScenario(), and return cleanly.
+    // If in Town and Host, gracefully close/leave lobby, switch slot (which triggers QuickReloadLevel and MenuStart), and Close() the window.
+    std::regex selectBlockRegex(
+        R"(Lobby::CloseLobby\s*\(\s*\)\s*;[\s\r\n]*if\s*\(\s*GetMenuState\s*\(\s*\)\s*!=\s*MenuState::MainMenu\s*\)\s*\{[\s\r\n]*if\s*\(\s*!inTown\s*\|\|\s*!isHost\s*\)\s*\{[\s\r\n]*GlobalCache::Set\s*\(\s*"switch_to_save_slot"[\s\S]*?StopScenario\s*\(\s*\)\s*;[\s\r\n]*return\s*;[\s\r\n]*\}[\s\r\n]*\}[\s\r\n]*SwitchToSaveSlot\s*\(\s*slotKey\s*,\s*slotCloud\s*\)\s*;[\s\r\n]*RefreshList\s*\(\s*\)\s*;)"
+    );
+    std::smatch matchSelect;
+    if (std::regex_search(source, matchSelect, selectBlockRegex)) {
+        std::string replSelect =
+            "Lobby::CloseLobby();\n"
+            "\t\t\t\t\tLobby::LeaveLobby();\n\n"
+            "\t\t\t\t\tif (GetMenuState() != MenuState::MainMenu)\n"
+            "\t\t\t\t\t{\n"
+            "\t\t\t\t\t\tif (!inTown || !isHost)\n"
+            "\t\t\t\t\t\t{\n"
+            "\t\t\t\t\t\t\tGlobalCache::Set(\"switch_to_save_slot\", \"\" + slotKey + \" \" + (slotCloud ? \"true\" : \"false\"));\n"
+            "\t\t\t\t\t\t\tStopScenario();\n"
+            "\t\t\t\t\t\t\treturn;\n"
+            "\t\t\t\t\t\t}\n"
+            "\t\t\t\t\t}\n\n"
+            "\t\t\t\t\tSwitchToSaveSlot(slotKey, slotCloud);\n"
+            "\t\t\t\t\tm_closing = true;\n"
+            "\t\t\t\t\treturn;";
+        source.replace(matchSelect.position(), matchSelect.length(), replSelect);
+        anyPatched = true;
+    }
+
+    // Anchor 2: Guard wItem.Clone() in RefreshList
+    const std::string kCloneTarget = "auto wItem = m_listTemplate.Clone();";
+    size_t posClone = source.find(kCloneTarget);
+    if (posClone != std::string::npos) {
+        std::string cloneRepl =
+            "auto wItem = m_listTemplate.Clone();\n"
+            "\t\t\t\tif (wItem is null)\n"
+            "\t\t\t\t\tcontinue;";
+        source.replace(posClone, kCloneTarget.length(), cloneRepl);
+        anyPatched = true;
+    }
+
+    // Anchor 3: Defensive null guards on widget lookups in RefreshList
+    std::regex refreshGuardsRegex(
+        R"(auto\s+nameW\s*=\s*cast<TextWidget>\(wItem\.GetWidgetById\("name"\)\);[\s\r\n]*nameW\.SetText\(!saveSlots\[i\]\.name\.isEmpty\(\)\s*\?\s*saveSlots\[i\]\.name\s*:\s*GetProfileName\(saveSlots\[i\]\.key,\s*saveSlots\[i\]\.cloud\)\);[\s\r\n]*if\s*\(\s*saveSlots\[i\]\.modded\s*\)[\s\r\n]*\{[\s\r\n]*wItem\.GetWidgetById\("cloud"\)\.m_offset\.x\s*\+=\s*12;[\s\r\n]*nameW\.m_offset\.x\s*\+=\s*12;[\s\r\n]*\}[\s\r\n]*if\s*\(\s*saveSlots\[i\]\.cloud\s*\)[\s\r\n]*nameW\.m_offset\.x\s*\+=\s*15;[\s\r\n]*wItem\.GetWidgetById\("modded"\)\.m_visible\s*=\s*saveSlots\[i\]\.modded;[\s\r\n]*wItem\.GetWidgetById\("cloud"\)\.m_visible\s*=\s*saveSlots\[i\]\.cloud;[\s\r\n]*wItem\.GetWidgetById\("selected"\)\.m_visible\s*=\s*selected;)"
+    );
+    std::smatch matchRefresh;
+    if (std::regex_search(source, matchRefresh, refreshGuardsRegex)) {
+        std::string replRefresh =
+            "auto nameW = cast<TextWidget>(wItem.GetWidgetById(\"name\"));\n"
+            "\t\t\t\tif (nameW !is null)\n"
+            "\t\t\t\t\tnameW.SetText(!saveSlots[i].name.isEmpty() ? saveSlots[i].name : GetProfileName(saveSlots[i].key, saveSlots[i].cloud));\n\n"
+            "\t\t\t\tauto cloudW = wItem.GetWidgetById(\"cloud\");\n"
+            "\t\t\t\tauto moddedW = wItem.GetWidgetById(\"modded\");\n"
+            "\t\t\t\tauto selectedW = wItem.GetWidgetById(\"selected\");\n\n"
+            "\t\t\t\tif (saveSlots[i].modded)\n"
+            "\t\t\t\t{\n"
+            "\t\t\t\t\tif (cloudW !is null) cloudW.m_offset.x += 12;\n"
+            "\t\t\t\t\tif (nameW !is null) nameW.m_offset.x += 12;\n"
+            "\t\t\t\t}\n\n"
+            "\t\t\t\tif (saveSlots[i].cloud && nameW !is null)\n"
+            "\t\t\t\t\tnameW.m_offset.x += 15;\n\n"
+            "\t\t\t\tif (moddedW !is null) moddedW.m_visible = saveSlots[i].modded;\n"
+            "\t\t\t\tif (cloudW !is null) cloudW.m_visible = saveSlots[i].cloud;\n"
+            "\t\t\t\tif (selectedW !is null) selectedW.m_visible = selected;";
+        source.replace(matchRefresh.position(), matchRefresh.length(), replRefresh);
+        anyPatched = true;
+    }
+
+    return anyPatched;
+}
+
+bool HookEngine::PatchMainMenuGameMode(std::string& source) {
+    if (source.find("class MainMenuGameMode") == std::string::npos) {
+        return false;
+    }
+
+    const std::string kChatTarget = "m_ingameChat.StopInput();";
+    size_t posChat = source.find(kChatTarget);
+    if (posChat != std::string::npos) {
+        source.replace(posChat, kChatTarget.length(),
+            "if (m_ingameChat !is null)\n\t\t\tm_ingameChat.StopInput();");
+        return true;
+    }
+
+    return false;
+}
+
+bool HookEngine::PatchWindowMainMenu(std::string& source) {
+    if (source.find("class WindowMainMenu") == std::string::npos) {
+        return false;
+    }
+
+    bool anyPatched = false;
+
+    // Anchor 1: Declare m_wasInLobby field
+    const std::string kBtnNumTarget = "int m_buttonNum;";
+    size_t posBtn = source.find(kBtnNumTarget);
+    if (posBtn != std::string::npos && source.find("bool m_wasInLobby;") == std::string::npos) {
+        source.replace(posBtn, kBtnNumTarget.length(),
+            "int m_buttonNum;\n\tbool m_wasInLobby;");
+        anyPatched = true;
+    }
+
+    // Anchor 2: Initialize m_wasInLobby in constructor
+    const std::string kInitTarget = "RefreshButtons();\n\t}";
+    size_t posInit = source.find(kInitTarget);
+    if (posInit != std::string::npos && source.find("m_wasInLobby = Lobby::IsInLobby();") == std::string::npos) {
+        source.replace(posInit, kInitTarget.length(),
+            "m_wasInLobby = Lobby::IsInLobby();\n\t\tRefreshButtons();\n\t}");
+        anyPatched = true;
+    }
+
+    // Anchor 3: Sync m_menuState in RefreshButtons
+    const std::string kRefreshTarget = "void RefreshButtons()\n\t{\n\t\tm_buttonList.ClearChildren();";
+    size_t posRefresh = source.find(kRefreshTarget);
+    if (posRefresh != std::string::npos) {
+        source.replace(posRefresh, kRefreshTarget.length(),
+            "void RefreshButtons()\n\t{\n\t\tm_menuState = GetMenuState();\n\t\tm_buttonList.ClearChildren();");
+        anyPatched = true;
+    }
+
+    // Anchor 4: Reactive Update override for lobby and menu state changes
+    const std::string kBackTarget = "bool Back() override";
+    size_t posBack = source.find(kBackTarget);
+    if (posBack != std::string::npos && source.find("bool Update(int ms, GameInput& gameInput, MenuInput& menuInput) override") == std::string::npos) {
+        std::string updateMethod =
+            "bool Update(int ms, GameInput& gameInput, MenuInput& menuInput) override\n"
+            "\t{\n"
+            "\t\tbool inLobby = Lobby::IsInLobby();\n"
+            "\t\tif (m_wasInLobby != inLobby || m_menuState != GetMenuState())\n"
+            "\t\t{\n"
+            "\t\t\tm_wasInLobby = inLobby;\n"
+            "\t\t\tRefreshButtons();\n"
+            "\t\t}\n"
+            "\t\treturn AWindowObject::Update(ms, gameInput, menuInput);\n"
+            "\t}\n\n\t";
+        source.replace(posBack, kBackTarget.length(), updateMethod + kBackTarget);
+        anyPatched = true;
+    }
+
+    return anyPatched;
+}
+
